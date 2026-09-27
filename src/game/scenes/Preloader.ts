@@ -33,13 +33,18 @@ export class Preloader extends Scene
 
         this.load.image('shop-bg', 'bg2.png');
 
-        this.load.image('cashier', 'characters/CashierFemale.png');
+        this.load.image('cashier-female', 'characters/CashierFemale.png');
+        this.load.image('cashier-male', 'characters/CashierMale.png');
         this.load.image('customer', 'characters/CustomerFemale.png');
+        this.load.image('customer2', 'characters/Customer_2.png');
 
         this.load.image('item-apple', 'items/Apple.png');
         this.load.image('item-banana', 'items/Banana.png');
         this.load.image('item-carrot', 'items/Carrot.png');
         this.load.image('item-cilantro', 'items/Cilantro.png');
+        this.load.image('item-pepper', 'items/Pepper.png');
+        this.load.image('item-water', 'items/Water_bottle.png');
+        this.load.image('item-watermelon', 'items/Watermelon.png');
 
         this.load.image('bill-1', 'items/1Dollar.png');
         this.load.image('bill-5', 'items/5Dollar.png');
@@ -48,6 +53,15 @@ export class Preloader extends Scene
 
         this.load.svg('btn-round', 'UI/button_round_depth_flat.svg');
         this.load.svg('icon-check', 'UI/icon_checkmark.svg');
+
+        this.load.audio('sfx-correct', 'Sounds/CashRegisterSound.mp3');
+        this.load.audio('music-cashier', 'Sounds/CashierTune.m4a');
+        this.load.audio('music-new-game', 'Sounds/New game song.m4a');
+        this.load.audio('sfx-ui-click', 'Sounds/UiClick.mp3');
+        this.load.audio('sfx-ui-sound', 'Sounds/UiSound.mp3');
+        this.load.audio('sfx-chime', 'Sounds/Chime.mp3');
+        this.load.audio('sfx-error', 'Sounds/Error.mp3');
+        this.load.audio('sfx-progression', 'Sounds/Progression.mp3');
     }
 
     create ()
@@ -60,7 +74,11 @@ export class Preloader extends Scene
         if (document.fonts)
         {
             Promise.race([
-                document.fonts.load('400 24px "Cormorant Garamond"'),
+                Promise.all([
+                    document.fonts.load('400 24px "Cormorant Garamond"'),
+                    document.fonts.load('600 24px "Inter"'),
+                    document.fonts.load('800 24px "Inter"')
+                ]),
                 new Promise((resolve) => setTimeout(resolve, 1500))
             ]).then(startMenu).catch(startMenu);
         }
