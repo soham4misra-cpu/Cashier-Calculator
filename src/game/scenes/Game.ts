@@ -1,4 +1,5 @@
 import { Scene, GameObjects } from 'phaser';
+import { Lives } from '../systems/Lives';
 
 interface ItemDefinition
 {
@@ -147,6 +148,7 @@ export class Game extends Scene
     payment = 0;
     givenAmount = 0;
     currentItems: PurchaseItem[] = [];
+    lives: Lives;
 
     constructor ()
     {
@@ -169,6 +171,11 @@ export class Game extends Scene
 
         const mistakesPill = this.createStatPill(1000, true, 'Mistakes: 0', 0xd9542f);
         this.mistakesText = mistakesPill.text;
+
+        this.score = 0;
+        this.mistakes = 0;
+        this.lives = new Lives(this, 512, 18);
+        this.tweens.add({ targets: this.lives.container, alpha: { from: 0, to: 1 }, duration: 700, ease: 'Sine.easeOut' });
 
         this.feedbackContainer = this.add.container(512, 165).setDepth(10).setAlpha(0);
 
@@ -480,6 +487,7 @@ export class Game extends Scene
             const breakdown = formatBillBreakdown(minimalBillBreakdown(changeDue));
             this.showFeedback('incorrect', `Not Quite — Customer is owed $${changeDue}`, `Correct change: ${breakdown}`);
             this.resetGivenAmount();
+            this.loseLife();
             return;
         }
 
@@ -488,6 +496,7 @@ export class Game extends Scene
             const breakdown = formatBillBreakdown(minimalBillBreakdown(changeDue));
             this.showFeedback('half', 'Right Amount — Fewer Bills Works', `Try: ${breakdown}`);
             this.resetGivenAmount();
+            this.loseLife();
             return;
         }
 
@@ -498,6 +507,16 @@ export class Game extends Scene
         this.setControlsActive(false);
         this.resetGivenAmount();
         this.time.delayedCall(900, () => this.walkCustomerOut());
+    }
+
+    private loseLife (): void
+    {
+        if (this.lives.lose() > 0) return;
+
+        this.state = 'resolving';
+        this.setControlsActive(false);
+        this.infoText.setText('Out of lives — the shop is closing…');
+        this.time.delayedCall(2400, () => this.scene.start('GameOver', { served: this.score }));
     }
 
     private drawXIcon (x: number, y: number, size: number, color: number): void
