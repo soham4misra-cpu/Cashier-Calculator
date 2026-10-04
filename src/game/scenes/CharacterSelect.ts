@@ -1,4 +1,5 @@
 import { Scene, GameObjects } from 'phaser';
+import { DEFAULT_DIFFICULTY, DIFFICULTIES, Difficulty } from '../economy';
 
 const ACCENT_ORANGE = 0xf3814a;
 const CARD_COLOR = 0xffffff;
@@ -55,6 +56,46 @@ export class CharacterSelect extends Scene
 
         CHARACTERS.forEach((character, index) => {
             this.createCharacterCard(character, centers[index], cardY, cardWidth, cardHeight);
+        });
+
+        this.createDifficultyPicker(680);
+    }
+
+    private createDifficultyPicker (y: number): void
+    {
+        this.add.text(512, y - 40, 'Difficulty', {
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: 16, color: '#e9e2d8', align: 'center'
+        }).setOrigin(0.5);
+
+        const pillW = 130;
+        const pillH = 44;
+        const gap = 16;
+        const selected: Difficulty = this.registry.get('difficulty') ?? DEFAULT_DIFFICULTY;
+
+        const pills = DIFFICULTIES.map((option, index) => {
+            const cx = 512 + (index - 1) * (pillW + gap);
+            const bg = this.add.graphics();
+            const label = this.add.text(cx, y, option.label, {
+                fontFamily: FONT_UI, fontStyle: '800', fontSize: 18, color: TEXT_MUTED
+            }).setOrigin(0.5);
+
+            const draw = (isSelected: boolean) => {
+                bg.clear();
+                bg.fillStyle(isSelected ? ACCENT_ORANGE : CARD_COLOR, 1);
+                bg.fillRoundedRect(cx - pillW / 2, y - pillH / 2, pillW, pillH, pillH / 2);
+                label.setColor(isSelected ? TEXT_DARK : TEXT_MUTED);
+            };
+
+            draw(option.key === selected);
+
+            const hitZone = this.add.zone(cx, y, pillW, pillH).setInteractive({ useHandCursor: true });
+            hitZone.on('pointerdown', () => {
+                this.sound.play('sfx-ui-click', { volume: 0.4 });
+                this.registry.set('difficulty', option.key);
+                pills.forEach((other) => other.draw(other.key === option.key));
+            });
+
+            return { key: option.key, draw };
         });
     }
 

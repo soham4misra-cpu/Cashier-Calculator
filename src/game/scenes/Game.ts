@@ -1,4 +1,5 @@
 import { Scene, GameObjects } from 'phaser';
+import { DEFAULT_DIFFICULTY, getBillsTarget, getPayoutMultiplier, Difficulty } from '../economy';
 
 interface ItemDefinition
 {
@@ -327,6 +328,7 @@ export class Game extends Scene
     state: RoundState = 'idle';
     score = 0;
     revenue = 0;
+    payoutMultiplier = 1;
     price = 0;
     payment = 0;
     givenAmount = 0;
@@ -363,6 +365,7 @@ export class Game extends Scene
         this.state = 'idle';
         this.score = 0;
         this.revenue = 0;
+        this.payoutMultiplier = getPayoutMultiplier(this.registry.get('multiplierLevel') ?? 0);
         this.price = 0;
         this.payment = 0;
         this.givenAmount = 0;
@@ -1001,7 +1004,7 @@ export class Game extends Scene
 
         const elapsedSeconds = (this.time.now - this.roundStartTime) / 1000;
         const speedMultiplier = getSpeedBonusMultiplier(elapsedSeconds);
-        const payout = Math.round(this.price * speedMultiplier);
+        const payout = Math.round(this.price * speedMultiplier * this.payoutMultiplier);
 
         this.score += 1;
         this.scoreText.setText(`Served: ${this.score}`);
@@ -1273,8 +1276,19 @@ export class Game extends Scene
         const totalRevenue = (this.registry.get('totalRevenue') ?? 0) + this.revenue;
         this.registry.set('totalRevenue', totalRevenue);
 
+        // Spendable cash is the same money, minus whatever gets spent in the
+        // shop — so today's takings land here too, ready for upgrades.
+        const cash = (this.registry.get('cash') ?? 0) + this.revenue;
+        this.registry.set('cash', cash);
+
         const isFinalDay = this.currentDay >= TOTAL_DAYS;
         if (!isFinalDay) this.registry.set('currentDay', this.currentDay + 1);
+
+        // Only the final day checks the bills — lifetime revenue has to clear
+        // the target for the chosen difficulty by then.
+        const difficulty: Difficulty = this.registry.get('difficulty') ?? DEFAULT_DIFFICULTY;
+        const billsTarget = getBillsTarget(difficulty);
+        const billsPaid = totalRevenue >= billsTarget;
 
         // Fade the music out alongside a camera fade-to-black, and only swap
         // scenes once the screen is fully covered — switching scenes
@@ -1295,6 +1309,8 @@ export class Game extends Scene
                 firstTryCorrect: this.firstTryCorrect,
                 revenue: this.revenue,
                 totalRevenue,
+                billsTarget,
+                billsPaid,
                 avgTimeSeconds
             });
         });

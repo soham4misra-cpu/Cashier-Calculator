@@ -21,6 +21,8 @@ interface DaySummary
     firstTryCorrect: number;
     revenue: number;
     totalRevenue: number;
+    billsTarget: number;
+    billsPaid: boolean;
     avgTimeSeconds: number;
 }
 
@@ -48,6 +50,8 @@ export class GameOver extends Scene
             firstTryCorrect: data.firstTryCorrect ?? 0,
             revenue: data.revenue ?? 0,
             totalRevenue: data.totalRevenue ?? 0,
+            billsTarget: data.billsTarget ?? 0,
+            billsPaid: data.billsPaid ?? false,
             avgTimeSeconds: data.avgTimeSeconds ?? 0
         };
     }
@@ -65,7 +69,7 @@ export class GameOver extends Scene
         const { summary } = this;
 
         const title = summary.isFinalDay
-            ? 'Final Day Complete!'
+            ? (summary.billsPaid ? 'All Bills Paid!' : 'Bills Unpaid')
             : summary.ranOutOfLives
                 ? 'Out of Lives!'
                 : `Day ${summary.day} Complete!`;
@@ -88,7 +92,9 @@ export class GameOver extends Scene
         }
 
         const subtitle = summary.isFinalDay
-            ? `You kept the shop open for all ${summary.totalDays} days!`
+            ? (summary.billsPaid
+                ? `You kept the shop open for all ${summary.totalDays} days!`
+                : `You needed $${summary.billsTarget} in total revenue to pay the bills.`)
             : summary.ranOutOfLives
                 ? 'Three mistakes closed the shop early today.'
                 : `Day ${summary.day} of ${summary.totalDays} — here's how it went`;
@@ -139,7 +145,9 @@ export class GameOver extends Scene
         // Total revenue lives outside the per-day card — it's the running
         // score across the whole 5-day run, not something that resets.
         const totalRevenueY = cardY + cardHeight + 38;
-        const totalRevenueLabel = `Total Revenue: $${summary.totalRevenue}`;
+        const totalRevenueLabel = summary.isFinalDay
+            ? `Total Revenue: $${summary.totalRevenue} / $${summary.billsTarget} needed`
+            : `Total Revenue: $${summary.totalRevenue}`;
         this.add.text(512, totalRevenueY, totalRevenueLabel, {
             fontFamily: FONT_UI, fontStyle: '800', fontSize: summary.isFinalDay ? 28 : 22, color: '#ffffff',
             align: 'center'
@@ -148,7 +156,7 @@ export class GameOver extends Scene
         const buttonWidth = 320;
         const buttonHeight = 64;
         const buttonY = totalRevenueY + 50;
-        const buttonLabelText = summary.isFinalDay ? 'Play Again' : 'Start Next Day';
+        const buttonLabelText = summary.isFinalDay ? 'Play Again' : 'Go to Shop';
 
         const buttonShadow = this.add.graphics();
         buttonShadow.fillStyle(0x000000, 0.25);
@@ -189,11 +197,13 @@ export class GameOver extends Scene
                     // straight into a new day 1.
                     this.registry.set('currentDay', 1);
                     this.registry.set('totalRevenue', 0);
+                    this.registry.set('cash', 0);
+                    this.registry.set('multiplierLevel', 0);
                     this.scene.start('MainMenu');
                 }
                 else
                 {
-                    this.scene.start('Game');
+                    this.scene.start('Shop');
                 }
             });
         });
