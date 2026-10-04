@@ -58,6 +58,9 @@ const PRICE_SCALE_PER_LEVEL = 0.12;
 // or mistake-prone one, which is what produces the "10 to 30" range.
 const DAY_DURATION_MS = 4 * 60 * 1000;
 
+// Three strikes and the shop closes early for the day.
+const MAX_LIVES = 3;
+
 // The two tracks take turns rather than one looping forever — whichever
 // plays first varies day to day, and each hands off to the next with a
 // crossfade instead of a hard cut.
@@ -251,11 +254,11 @@ export class Game extends Scene
     itemPriceTags: GameObjects.Text[] = [];
 
     scoreText: GameObjects.Text;
-    mistakesText: GameObjects.Text;
     revenueText: GameObjects.Text;
     scorePillContainer: GameObjects.Container;
     revenuePillContainer: GameObjects.Container;
-    mistakesPillContainer: GameObjects.Container;
+    livesPillContainer: GameObjects.Container;
+    livesDots: GameObjects.Arc[] = [];
     infoText: GameObjects.Text;
     totalText: GameObjects.Text;
     feedbackContainer: GameObjects.Container;
@@ -273,7 +276,6 @@ export class Game extends Scene
 
     state: RoundState = 'idle';
     score = 0;
-    mistakes = 0;
     revenue = 0;
     price = 0;
     payment = 0;
@@ -286,6 +288,8 @@ export class Game extends Scene
     totalCustomerTimeMs = 0;
     firstTryCorrect = 0;
     roundHadMistake = false;
+    lives = MAX_LIVES;
+    ranOutOfLives = false;
     currentItems: PurchaseItem[] = [];
 
     constructor ()
@@ -306,7 +310,6 @@ export class Game extends Scene
         // "new" day would silently inherit the last one's numbers.
         this.state = 'idle';
         this.score = 0;
-        this.mistakes = 0;
         this.revenue = 0;
         this.price = 0;
         this.payment = 0;
@@ -318,6 +321,9 @@ export class Game extends Scene
         this.totalCustomerTimeMs = 0;
         this.firstTryCorrect = 0;
         this.roundHadMistake = false;
+        this.lives = MAX_LIVES;
+        this.ranOutOfLives = false;
+        this.livesDots = [];
         this.currentItems = [];
         this.itemIcons = [];
         this.itemPriceTags = [];
@@ -363,16 +369,16 @@ export class Game extends Scene
         this.revenueText = revenuePill.text;
         this.revenuePillContainer = revenuePill.container;
 
-        const mistakesPill = this.createStatPill(1000, 'right', 'Mistakes: 0', ACCENT_RED);
-        this.mistakesText = mistakesPill.text;
-        this.mistakesPillContainer = mistakesPill.container;
+        const livesPill = this.createLivesPill(912);
+        this.livesPillContainer = livesPill.container;
+        this.livesDots = livesPill.dots;
 
         this.feedbackContainer = this.add.container(512, 165).setDepth(10).setAlpha(0);
 
         this.createChangeUI();
 
         this.tweens.add({
-            targets: [this.cashier, scorePill.container, revenuePill.container, mistakesPill.container, this.changeUI],
+            targets: [this.cashier, scorePill.container, revenuePill.container, livesPill.container, this.changeUI],
             alpha: 1,
             duration: 700,
             ease: 'Sine.easeOut'
@@ -443,6 +449,56 @@ export class Game extends Scene
         container.setDepth(10);
 
         return { container, text };
+    }
+
+    // Same white pill shell as createStatPill, but the "value" is three
+    // dots instead of a number — a heart-style life counter that fills in
+    // green and empties to a hollow outline as mistakes cost lives.
+    private createLivesPill (x: number): { container: GameObjects.Container; dots: GameObjects.Arc[] }
+    {
+        const width = 176;
+        const height = 48;
+        const left = -width / 2;
+        const pillRadius = height / 2;
+
+        const shadow = this.add.graphics();
+        shadow.fillStyle(SHADOW_COLOR, 0.14);
+        shadow.fillRoundedRect(left + 1, 3, width, height, pillRadius);
+
+        const bg = this.add.graphics();
+        bg.fillStyle(CARD_COLOR, 1);
+        bg.fillRoundedRect(left, 0, width, height, pillRadius);
+
+        const label = this.add.text(left + 20, height / 2, 'Lives', {
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: 18, color: TEXT_DARK
+        }).setOrigin(0, 0.5);
+
+        const dots: GameObjects.Arc[] = [];
+        const dotStartX = left + 20 + label.width + 16;
+        const dotGap = 24;
+
+        for (let i = 0; i < MAX_LIVES; i++)
+        {
+            const dot = this.add.circle(dotStartX + i * dotGap, height / 2, 8, ACCENT_GREEN, 1);
+            dots.push(dot);
+        }
+
+        const container = this.add.container(x, 20, [shadow, bg, label, ...dots]);
+        container.setDepth(10);
+
+        return { container, dots };
+    }
+
+    // Empties one life dot (hollow, faded) to reflect the current life
+    // count — called after every mistake, and once on a fresh day to make
+    // sure a previous day's empty dots don't carry over.
+    private refreshLivesDots (): void
+    {
+        this.livesDots.forEach((dot, index) => {
+            const alive = index < this.lives;
+            dot.setFillStyle(ACCENT_GREEN, alive ? 1 : 0);
+            dot.setStrokeStyle(alive ? 0 : 2, ACCENT_RED, 0.5);
+        });
     }
 
     private createChangeUI (): void
@@ -813,6 +869,27 @@ export class Game extends Scene
         });
     }
 
+    private loseLife (): void
+    {
+        this.lives = Math.max(0, this.lives - 1);
+        this.refreshLivesDots();
+        this.punch(this.livesPillContainer, 1.2);
+
+        if (this.lives <= 0) this.ranOutOfLives = true;
+    }
+
+    // Three strikes closes the shop early — the customer still walks off
+    // like any other resolved round, it just leads to endDay() instead of
+    // the next customer.
+    private handleLifeLossIfAny (): void
+    {
+        if (!this.ranOutOfLives) return;
+
+        this.state = 'resolving';
+        this.setControlsActive(false);
+        this.time.delayedCall(1300, () => this.walkCustomerOut());
+    }
+
     private handleConfirm (): void
     {
         if (this.state !== 'awaiting-change') return;
@@ -821,22 +898,23 @@ export class Game extends Scene
 
         if (this.givenAmount !== changeDue)
         {
-            this.mistakes += 1;
             this.roundHadMistake = true;
-            this.mistakesText.setText(`Mistakes: ${this.mistakes}`);
-            this.punch(this.mistakesPillContainer, 1.2);
+            this.loseLife();
             const breakdown = formatBillBreakdown(minimalBillBreakdown(changeDue));
             this.showFeedback('incorrect', `Not Quite — Customer is owed $${changeDue}`, `Correct change: ${breakdown}`);
             this.resetGivenAmount();
+            this.handleLifeLossIfAny();
             return;
         }
 
         if (this.getBillsUsedCount() > minimalBillCount(changeDue))
         {
             this.roundHadMistake = true;
+            this.loseLife();
             const breakdown = formatBillBreakdown(minimalBillBreakdown(changeDue));
             this.showFeedback('half', 'Right Amount — Fewer Bills Works', `Try: ${breakdown}`);
             this.resetGivenAmount();
+            this.handleLifeLossIfAny();
             return;
         }
 
@@ -1094,7 +1172,7 @@ export class Game extends Scene
             }
         });
 
-        const dayIsOver = this.time.now - this.dayStartTime >= DAY_DURATION_MS;
+        const dayIsOver = this.ranOutOfLives || (this.time.now - this.dayStartTime >= DAY_DURATION_MS);
         this.infoText.setText(dayIsOver ? 'Closing up for the day…' : 'Waiting for the next customer…');
         this.time.delayedCall(1600, () => {
             if (dayIsOver) this.endDay();
@@ -1120,6 +1198,7 @@ export class Game extends Scene
         this.cameras.main.once('camerafadeoutcomplete', () => {
             this.music.stop();
             this.scene.start('GameOver', {
+                ranOutOfLives: this.ranOutOfLives,
                 totalCustomers,
                 firstTryCorrect: this.firstTryCorrect,
                 revenue: this.revenue,

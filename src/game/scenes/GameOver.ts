@@ -10,6 +10,7 @@ const FONT_UI = '"Inter", "Segoe UI", sans-serif';
 
 interface DaySummary
 {
+    ranOutOfLives: boolean;
     totalCustomers: number;
     firstTryCorrect: number;
     revenue: number;
@@ -31,6 +32,7 @@ export class GameOver extends Scene
         // Defaults cover the case this scene is ever reached without a day
         // actually having been played (e.g. during development).
         this.summary = {
+            ranOutOfLives: data.ranOutOfLives ?? false,
             totalCustomers: data.totalCustomers ?? 0,
             firstTryCorrect: data.firstTryCorrect ?? 0,
             revenue: data.revenue ?? 0,
@@ -48,12 +50,18 @@ export class GameOver extends Scene
         this.background.setDisplaySize(1024, 768);
         this.add.rectangle(512, 384, 1024, 768, 0x1a120b, 0.55);
 
-        this.add.text(512, 96, 'Day Complete!', {
+        const title = this.summary.ranOutOfLives ? 'Out of Lives!' : 'Day Complete!';
+
+        this.add.text(512, 96, title, {
             fontFamily: FONT_UI, fontStyle: '800', fontSize: 44, color: '#ffffff',
             align: 'center'
         }).setOrigin(0.5).setShadow(0, 4, 'rgba(0,0,0,0.35)', 10);
 
-        this.add.text(512, 142, "Here's how the shop did today", {
+        const subtitle = this.summary.ranOutOfLives
+            ? 'Three mistakes closed the shop early today.'
+            : "Here's how the shop did today";
+
+        this.add.text(512, 142, subtitle, {
             fontFamily: FONT_UI, fontSize: 18, color: '#e9e2d8',
             align: 'center'
         }).setOrigin(0.5);
