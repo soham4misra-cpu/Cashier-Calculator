@@ -96,12 +96,12 @@ const FLOOR_Y = 520;
 const PANEL_Y = 476;
 const PANEL_MARGIN = 18; // inset so the panel reads as a floating card, not a flush bar
 const CUSTOMER_START_X = 1150;
-const CUSTOMER_MEET_X = 640;
+const CUSTOMER_MEET_X = 760;
 const CUSTOMER_DISPLAY_SIZE = 480;
 
 // A new customer sprite is picked at random each round — same walk-in,
 // idle bob, and walk-out treatment regardless of which one shows up.
-const CUSTOMER_KEYS = ['customer', 'customer2'];
+const CUSTOMER_KEYS = ['customer', 'customer2', 'customer3'];
 
 // The purchased items are displayed as a fixed cluster inside the panel
 // (right side, above the bill row) rather than floating in world space
