@@ -53,10 +53,21 @@ const PREMIUM_UNLOCK_LEVEL = 2;
 const MAX_PRICE_SCALE = 1.6;
 const PRICE_SCALE_PER_LEVEL = 0.12;
 
-// The day is a fixed stretch of real time, not a fixed customer count — a
-// fast, accurate player naturally serves more customers in it than a slow
-// or mistake-prone one, which is what produces the "10 to 30" range.
-const DAY_DURATION_MS = 4 * 60 * 1000;
+// Five days, each a fixed stretch of real time (not a fixed customer
+// count) — a fast, accurate player naturally serves more customers in it
+// than a slow or mistake-prone one. Days get longer as they go, from a
+// tight 60s opener up to a full 3-minute closer.
+const TOTAL_DAYS = 5;
+const DAY_DURATIONS_MS = [60, 90, 120, 150, 180].map((seconds) => seconds * 1000);
+
+// The in-game clock always runs 9am-5pm regardless of how long the day's
+// real-time budget is — an 8-hour shop day compressed into 60-180 seconds.
+const DAY_START_HOUR = 9;
+const DAY_END_HOUR = 17;
+
+// Difficulty also carries over between days — day 5 opens already harder
+// than day 1 ever gets, on top of its own within-day ramp.
+const LEVELS_PER_DAY = 2;
 
 // Three strikes and the shop closes early for the day.
 const MAX_LIVES = 3;
@@ -76,6 +87,7 @@ const ACCENT_GREEN = 0x4fa876;
 const ACCENT_RED = 0xe25b45;
 const ACCENT_ORANGE = 0xf3814a;
 const ACCENT_ORANGE_DARK = darkenColor(ACCENT_ORANGE, 0.8);
+const ACCENT_BLUE = 0x4a8fd9;
 const CARD_COLOR = 0xffffff;
 const TEXT_DARK = '#2b241d';
 const TEXT_MUTED = '#8a7f70';
@@ -153,6 +165,42 @@ function shuffled<T> (items: readonly T[]): T[]
 function getDifficultyLevel (roundNumber: number): number
 {
     return Math.floor(roundNumber / ROUNDS_PER_LEVEL);
+}
+
+// Day 1 starts at the base ramp; each day after that opens with a
+// permanently higher floor, on top of which the within-day ramp still
+// applies.
+function getDayDifficultyBonus (day: number): number
+{
+    return (day - 1) * LEVELS_PER_DAY;
+}
+
+// Stars reward accuracy across the whole day (not raw mistake count, so a
+// single slip on a long day doesn't hit as hard as one on a short day),
+// capped low if the day ended early from running out of lives.
+function getStarRating (accuracyPercent: number, ranOutOfLives: boolean): number
+{
+    let stars = 0;
+
+    if (accuracyPercent >= 90) stars = 3;
+    else if (accuracyPercent >= 70) stars = 2;
+    else if (accuracyPercent >= 40) stars = 1;
+
+    return ranOutOfLives ? Math.min(stars, 1) : stars;
+}
+
+// Formats the fraction of the day's real-time budget that has elapsed as a
+// 9am-5pm shop clock, e.g. "11:32 AM".
+function formatShopClock (dayFraction: number): string
+{
+    const clamped = Math.min(1, Math.max(0, dayFraction));
+    const totalMinutes = clamped * (DAY_END_HOUR - DAY_START_HOUR) * 60;
+    const hour24 = DAY_START_HOUR + Math.floor(totalMinutes / 60);
+    const minute = Math.floor(totalMinutes % 60);
+    const period = hour24 >= 12 ? 'PM' : 'AM';
+    const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+
+    return `${hour12}:${minute.toString().padStart(2, '0')} ${period}`;
 }
 
 function getAvailableItems (level: number): ItemDefinition[]
@@ -255,8 +303,10 @@ export class Game extends Scene
 
     scoreText: GameObjects.Text;
     revenueText: GameObjects.Text;
+    clockText: GameObjects.Text;
     scorePillContainer: GameObjects.Container;
     revenuePillContainer: GameObjects.Container;
+    clockPillContainer: GameObjects.Container;
     livesPillContainer: GameObjects.Container;
     livesDots: GameObjects.Arc[] = [];
     infoText: GameObjects.Text;
@@ -290,6 +340,8 @@ export class Game extends Scene
     roundHadMistake = false;
     lives = MAX_LIVES;
     ranOutOfLives = false;
+    currentDay = 1;
+    dayDurationMs = DAY_DURATIONS_MS[0];
     currentItems: PurchaseItem[] = [];
 
     constructor ()
@@ -332,6 +384,12 @@ export class Game extends Scene
         this.billCountBadges.clear();
         this.dayStartTime = this.time.now;
 
+        // Persisted in the registry (not scene data) so it survives "Start
+        // Next Day" restarts of this same scene instance. Defaults to day 1
+        // for a brand new session.
+        this.currentDay = this.registry.get('currentDay') ?? 1;
+        this.dayDurationMs = DAY_DURATIONS_MS[Math.min(this.currentDay, TOTAL_DAYS) - 1];
+
         this.background = this.add.image(512, 384, 'shop-bg');
         this.background.setDisplaySize(1024, 768);
 
@@ -361,15 +419,24 @@ export class Game extends Scene
             ease: 'Sine.easeInOut'
         });
 
-        const scorePill = this.createStatPill(24, 'left', 'Served: 0', ACCENT_GREEN);
+        // Four evenly-spaced pills across the top — the same safe "clear of
+        // the characters" strip the stat pills already lived in, so the
+        // clock has a natural home without touching layout anywhere else.
+        const topRowCenters = [112, 378.67, 645.33, 912];
+
+        const scorePill = this.createStatPill(topRowCenters[0], 'center', 'Served: 0', ACCENT_GREEN);
         this.scoreText = scorePill.text;
         this.scorePillContainer = scorePill.container;
 
-        const revenuePill = this.createStatPill(512, 'center', 'Revenue: $0', ACCENT_ORANGE);
+        const clockPill = this.createStatPill(topRowCenters[1], 'center', formatShopClock(0), ACCENT_BLUE);
+        this.clockText = clockPill.text;
+        this.clockPillContainer = clockPill.container;
+
+        const revenuePill = this.createStatPill(topRowCenters[2], 'center', 'Revenue: $0', ACCENT_ORANGE);
         this.revenueText = revenuePill.text;
         this.revenuePillContainer = revenuePill.container;
 
-        const livesPill = this.createLivesPill(912);
+        const livesPill = this.createLivesPill(topRowCenters[3]);
         this.livesPillContainer = livesPill.container;
         this.livesDots = livesPill.dots;
 
@@ -378,13 +445,25 @@ export class Game extends Scene
         this.createChangeUI();
 
         this.tweens.add({
-            targets: [this.cashier, scorePill.container, revenuePill.container, livesPill.container, this.changeUI],
+            targets: [this.cashier, scorePill.container, clockPill.container, revenuePill.container, livesPill.container, this.changeUI],
             alpha: 1,
             duration: 700,
             ease: 'Sine.easeOut'
         });
 
         this.time.delayedCall(600, () => this.startNewCustomer());
+    }
+
+    // Ticks the 9am-5pm shop clock forward each frame, mapped from however
+    // much of the day's real-time budget has elapsed.
+    update (): void
+    {
+        if (!this.clockText || !this.dayDurationMs) return;
+
+        const fraction = (this.time.now - this.dayStartTime) / this.dayDurationMs;
+        const formatted = formatShopClock(fraction);
+
+        if (this.clockText.text !== formatted) this.clockText.setText(formatted);
     }
 
     // Plays the next track in the rotation, fading it in over `fadeInMs`.
@@ -760,11 +839,10 @@ export class Game extends Scene
         this.customerArrivalTime = this.time.now;
         this.roundHadMistake = false;
 
-        // Difficulty is driven by how many customers have come through, not
-        // by accuracy — baskets keep growing and getting pricier even
-        // through a rough patch, rather than rewarding mistakes with easier
-        // rounds.
-        const level = getDifficultyLevel(this.roundNumber);
+        // Difficulty is driven by how many customers have come through today,
+        // plus a permanent floor that rises with the day number — day 5
+        // never starts as easy as day 1, on top of its own within-day ramp.
+        const level = getDifficultyLevel(this.roundNumber) + getDayDifficultyBonus(this.currentDay);
         this.difficultyLevel = level;
         this.roundNumber += 1;
 
@@ -1172,7 +1250,7 @@ export class Game extends Scene
             }
         });
 
-        const dayIsOver = this.ranOutOfLives || (this.time.now - this.dayStartTime >= DAY_DURATION_MS);
+        const dayIsOver = this.ranOutOfLives || (this.time.now - this.dayStartTime >= this.dayDurationMs);
         this.infoText.setText(dayIsOver ? 'Closing up for the day…' : 'Waiting for the next customer…');
         this.time.delayedCall(1600, () => {
             if (dayIsOver) this.endDay();
@@ -1187,6 +1265,16 @@ export class Game extends Scene
 
         const totalCustomers = this.roundNumber;
         const avgTimeSeconds = totalCustomers > 0 ? (this.totalCustomerTimeMs / totalCustomers) / 1000 : 0;
+        const accuracyPercent = totalCustomers > 0 ? (this.firstTryCorrect / totalCustomers) * 100 : 0;
+        const stars = getStarRating(accuracyPercent, this.ranOutOfLives);
+
+        // Revenue accumulates across all 5 days regardless of how today
+        // went; the day counter only advances if there's another day left.
+        const totalRevenue = (this.registry.get('totalRevenue') ?? 0) + this.revenue;
+        this.registry.set('totalRevenue', totalRevenue);
+
+        const isFinalDay = this.currentDay >= TOTAL_DAYS;
+        if (!isFinalDay) this.registry.set('currentDay', this.currentDay + 1);
 
         // Fade the music out alongside a camera fade-to-black, and only swap
         // scenes once the screen is fully covered — switching scenes
@@ -1198,10 +1286,15 @@ export class Game extends Scene
         this.cameras.main.once('camerafadeoutcomplete', () => {
             this.music.stop();
             this.scene.start('GameOver', {
+                day: this.currentDay,
+                totalDays: TOTAL_DAYS,
+                isFinalDay,
+                stars,
                 ranOutOfLives: this.ranOutOfLives,
                 totalCustomers,
                 firstTryCorrect: this.firstTryCorrect,
                 revenue: this.revenue,
+                totalRevenue,
                 avgTimeSeconds
             });
         });
