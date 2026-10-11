@@ -1,5 +1,8 @@
 import { Scene, GameObjects } from 'phaser';
 import { DEFAULT_DIFFICULTY, DIFFICULTIES, Difficulty } from '../economy';
+import { playSfx } from '../audio';
+import { applyAnimationSpeed } from '../settings';
+import { scaledFontSize } from '../ui/text';
 
 const ACCENT_ORANGE = 0xf3814a;
 const CARD_COLOR = 0xffffff;
@@ -23,6 +26,7 @@ const CHARACTERS: CharacterOption[] = [
 export class CharacterSelect extends Scene
 {
     background: GameObjects.Image;
+    private choosing = false;
 
     constructor ()
     {
@@ -33,18 +37,20 @@ export class CharacterSelect extends Scene
     {
         // Picks up from MainMenu's fade-to-black.
         this.cameras.main.fadeIn(500, 26, 18, 11);
+        applyAnimationSpeed(this);
+        this.choosing = false;
 
         this.background = this.add.image(512, 384, 'shop-bg');
         this.background.setDisplaySize(1024, 768);
         this.add.rectangle(512, 384, 1024, 768, 0x1a120b, 0.55);
 
         this.add.text(512, 96, 'Choose Your Cashier', {
-            fontFamily: FONT_UI, fontStyle: '800', fontSize: 40, color: '#ffffff',
+            fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(40, this.registry), color: '#ffffff',
             align: 'center'
         }).setOrigin(0.5).setShadow(0, 4, 'rgba(0,0,0,0.35)', 10);
 
         this.add.text(512, 142, 'Pick who runs the register today', {
-            fontFamily: FONT_UI, fontSize: 18, color: '#e9e2d8',
+            fontFamily: FONT_UI, fontSize: scaledFontSize(18, this.registry), color: '#e9e2d8',
             align: 'center'
         }).setOrigin(0.5);
 
@@ -64,7 +70,7 @@ export class CharacterSelect extends Scene
     private createDifficultyPicker (y: number): void
     {
         this.add.text(512, y - 40, 'Difficulty', {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 16, color: '#e9e2d8', align: 'center'
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(16, this.registry), color: '#e9e2d8', align: 'center'
         }).setOrigin(0.5);
 
         const pillW = 130;
@@ -76,7 +82,7 @@ export class CharacterSelect extends Scene
             const cx = 512 + (index - 1) * (pillW + gap);
             const bg = this.add.graphics();
             const label = this.add.text(cx, y, option.label, {
-                fontFamily: FONT_UI, fontStyle: '800', fontSize: 18, color: TEXT_MUTED
+                fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(18, this.registry), color: TEXT_MUTED
             }).setOrigin(0.5);
 
             const draw = (isSelected: boolean) => {
@@ -90,7 +96,7 @@ export class CharacterSelect extends Scene
 
             const hitZone = this.add.zone(cx, y, pillW, pillH).setInteractive({ useHandCursor: true });
             hitZone.on('pointerdown', () => {
-                this.sound.play('sfx-ui-click', { volume: 0.4 });
+                playSfx(this, 'sfx-ui-click', { volume: 0.4 });
                 this.registry.set('difficulty', option.key);
                 pills.forEach((other) => other.draw(other.key === option.key));
             });
@@ -120,11 +126,11 @@ export class CharacterSelect extends Scene
         portrait.setDisplaySize(200, 200);
 
         const label = this.add.text(0, 118, character.label, {
-            fontFamily: FONT_UI, fontStyle: '800', fontSize: 24, color: TEXT_DARK
+            fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(24, this.registry), color: TEXT_DARK
         }).setOrigin(0.5);
 
         const hint = this.add.text(0, 148, 'Tap to select', {
-            fontFamily: FONT_UI, fontStyle: '600', fontSize: 14, color: TEXT_MUTED
+            fontFamily: FONT_UI, fontStyle: '600', fontSize: scaledFontSize(14, this.registry), color: TEXT_MUTED
         }).setOrigin(0.5);
 
         const container = this.add.container(x, y, [shadow, bg, ring, portrait, label, hint]);
@@ -143,6 +149,11 @@ export class CharacterSelect extends Scene
         });
 
         hitZone.on('pointerdown', () => {
+            // First pick wins — a second card tapped during the fade would
+            // swap the cashier and queue another scene start.
+            if (this.choosing) return;
+            this.choosing = true;
+
             this.tweens.killTweensOf(container);
             this.tweens.add({
                 targets: container,
@@ -154,11 +165,11 @@ export class CharacterSelect extends Scene
                 }
             });
 
-            this.sound.play('sfx-ui-click', { volume: 0.5 });
+            playSfx(this, 'sfx-ui-click', { volume: 0.5 });
             this.registry.set('cashierKey', character.key);
 
             this.cameras.main.fadeOut(500, 26, 18, 11);
-            this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Game'));
+            this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Story'));
         });
     }
 }

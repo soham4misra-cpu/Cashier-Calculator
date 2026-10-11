@@ -1,4 +1,5 @@
 import { Scene } from 'phaser';
+import { seedSettingsIntoRegistry } from '../settings';
 
 export class Boot extends Scene
 {
@@ -17,6 +18,9 @@ export class Boot extends Scene
 
     create ()
     {
+        seedSettingsIntoRegistry(this.registry);
+        this.scene.launch('Overlay');
+
         this.scene.start('Preloader');
     }
 }

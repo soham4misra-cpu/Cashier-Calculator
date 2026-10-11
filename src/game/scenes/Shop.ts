@@ -1,5 +1,8 @@
 import { Scene, GameObjects } from 'phaser';
 import { getMultiplierCost, getPayoutMultiplier, MULTIPLIER_MAX_LEVEL, MULTIPLIER_STEP } from '../economy';
+import { playSfx } from '../audio';
+import { applyAnimationSpeed } from '../settings';
+import { scaledFontSize } from '../ui/text';
 
 const ACCENT_ORANGE = 0xf3814a;
 const ACCENT_GREEN = 0x4fa876;
@@ -13,12 +16,17 @@ const FONT_UI = '"Inter", "Segoe UI", sans-serif';
 export class Shop extends Scene
 {
     cashText: GameObjects.Text;
+    cashPillShadow: GameObjects.Graphics;
+    cashPillBg: GameObjects.Graphics;
+    cashPillX = 0;
+    cashPillY = 0;
     levelText: GameObjects.Text;
     bonusText: GameObjects.Text;
     pips: GameObjects.Arc[] = [];
     buyButton: GameObjects.Container;
     buyLabel: GameObjects.Text;
     buyBg: GameObjects.Graphics;
+    buyHitZone: GameObjects.Zone;
     buyEnabled = false;
 
     constructor ()
@@ -29,6 +37,7 @@ export class Shop extends Scene
     create ()
     {
         this.cameras.main.fadeIn(500, 26, 18, 11);
+        applyAnimationSpeed(this);
 
         const background = this.add.image(512, 384, 'shop-bg');
         background.setDisplaySize(1024, 768);
@@ -38,11 +47,11 @@ export class Shop extends Scene
         const nextDay: number = this.registry.get('currentDay') ?? 2;
 
         this.add.text(512, 84, 'Shop Open', {
-            fontFamily: FONT_UI, fontStyle: '800', fontSize: 40, color: '#ffffff', align: 'center'
+            fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(40, this.registry), color: '#ffffff', align: 'center'
         }).setOrigin(0.5).setShadow(0, 4, 'rgba(0,0,0,0.35)', 10);
 
         this.add.text(512, 128, `Day ${completedDay} is in the books — spend up before Day ${nextDay}`, {
-            fontFamily: FONT_UI, fontSize: 18, color: '#e9e2d8', align: 'center'
+            fontFamily: FONT_UI, fontSize: scaledFontSize(18, this.registry), color: '#e9e2d8', align: 'center'
         }).setOrigin(0.5);
 
         this.createCashPill(512, 176);
@@ -52,19 +61,13 @@ export class Shop extends Scene
 
     private createCashPill (x: number, y: number): void
     {
-        const width = 260;
-        const height = 52;
-
-        const shadow = this.add.graphics();
-        shadow.fillStyle(SHADOW_COLOR, 0.2);
-        shadow.fillRoundedRect(x - width / 2 + 2, y - height / 2 + 4, width, height, height / 2);
-
-        const bg = this.add.graphics();
-        bg.fillStyle(CARD_COLOR, 1);
-        bg.fillRoundedRect(x - width / 2, y - height / 2, width, height, height / 2);
+        this.cashPillX = x;
+        this.cashPillY = y;
+        this.cashPillShadow = this.add.graphics();
+        this.cashPillBg = this.add.graphics();
 
         this.cashText = this.add.text(x, y, '', {
-            fontFamily: FONT_UI, fontStyle: '800', fontSize: 24, color: TEXT_DARK
+            fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(24, this.registry), color: TEXT_DARK
         }).setOrigin(0.5);
 
         this.refreshCash();
@@ -89,11 +92,11 @@ export class Shop extends Scene
         this.add.circle(left + 52, top + 56, 12, ACCENT_ORANGE);
 
         this.add.text(left + 92, top + 40, 'Money Multiplier', {
-            fontFamily: FONT_UI, fontStyle: '800', fontSize: 26, color: TEXT_DARK
+            fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(26, this.registry), color: TEXT_DARK
         }).setOrigin(0, 0.5);
 
         this.add.text(left + 92, top + 74, `+${Math.round(MULTIPLIER_STEP * 100)}% revenue on every correct sale, per level`, {
-            fontFamily: FONT_UI, fontStyle: '600', fontSize: 16, color: TEXT_MUTED
+            fontFamily: FONT_UI, fontStyle: '600', fontSize: scaledFontSize(16, this.registry), color: TEXT_MUTED
         }).setOrigin(0, 0.5);
 
         const pipStartX = left + 52;
@@ -106,11 +109,11 @@ export class Shop extends Scene
         }
 
         this.levelText = this.add.text(left + 52, top + 176, '', {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 18, color: TEXT_DARK
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(18, this.registry), color: TEXT_DARK
         }).setOrigin(0, 0.5);
 
         this.bonusText = this.add.text(left + 52, top + 206, '', {
-            fontFamily: FONT_UI, fontStyle: '600', fontSize: 16, color: TEXT_MUTED
+            fontFamily: FONT_UI, fontStyle: '600', fontSize: scaledFontSize(16, this.registry), color: TEXT_MUTED
         }).setOrigin(0, 0.5);
 
         const buttonW = 180;
@@ -119,15 +122,15 @@ export class Shop extends Scene
         const buttonY = top + height - 46;
 
         this.buyLabel = this.add.text(0, 0, '', {
-            fontFamily: FONT_UI, fontStyle: '800', fontSize: 18, color: TEXT_DARK
+            fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(18, this.registry), color: TEXT_DARK
         }).setOrigin(0.5);
 
         this.buyBg = this.add.graphics();
 
-        const hitZone = this.add.zone(0, 0, buttonW, buttonH).setInteractive({ useHandCursor: true });
-        hitZone.on('pointerdown', () => this.tryBuy());
+        this.buyHitZone = this.add.zone(0, 0, buttonW, buttonH).setInteractive({ useHandCursor: true });
+        this.buyHitZone.on('pointerdown', () => this.tryBuy());
 
-        this.buyButton = this.add.container(buttonX, buttonY, [this.buyBg, this.buyLabel, hitZone]);
+        this.buyButton = this.add.container(buttonX, buttonY, [this.buyBg, this.buyLabel, this.buyHitZone]);
         this.buyButton.setData('w', buttonW);
         this.buyButton.setData('h', buttonH);
 
@@ -139,24 +142,29 @@ export class Shop extends Scene
         const width = 320;
         const height = 64;
 
+        // Drawn around the container's own origin so the idle pulse scales
+        // the button in place instead of drifting it across the screen.
         const shadow = this.add.graphics();
         shadow.fillStyle(0x000000, 0.25);
-        shadow.fillRoundedRect(x - width / 2 + 2, y - height / 2 + 5, width, height, height / 2);
+        shadow.fillRoundedRect(-width / 2 + 2, -height / 2 + 5, width, height, height / 2);
 
         const bg = this.add.graphics();
         bg.fillStyle(ACCENT_ORANGE, 1);
-        bg.fillRoundedRect(x - width / 2, y - height / 2, width, height, height / 2);
+        bg.fillRoundedRect(-width / 2, -height / 2, width, height, height / 2);
 
-        const label = this.add.text(x, y, `Start Day ${nextDay}`, {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 20, color: TEXT_DARK
+        const label = this.add.text(0, 0, `Start Day ${nextDay}`, {
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(20, this.registry), color: TEXT_DARK
         }).setOrigin(0.5);
 
-        const button = this.add.container(0, 0, [shadow, bg, label]);
-        this.tweens.add({ targets: button, scale: 1.04, duration: 750, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        const button = this.add.container(x, y, [shadow, bg, label]);
+        this.tweens.add({ targets: button, scale: 1.02, duration: 750, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
 
         const hitZone = this.add.zone(x, y, width, height).setInteractive({ useHandCursor: true });
         hitZone.on('pointerdown', () => {
-            this.sound.play('sfx-ui-click', { volume: 0.5 });
+            // One press only — repeat clicks during the fade would each
+            // queue another scene start.
+            hitZone.disableInteractive();
+            playSfx(this, 'sfx-ui-click', { volume: 0.5 });
             this.cameras.main.fadeOut(500, 26, 18, 11);
             this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Game'));
         });
@@ -173,7 +181,7 @@ export class Shop extends Scene
         this.registry.set('cash', cash - cost);
         this.registry.set('multiplierLevel', level + 1);
 
-        this.sound.play('sfx-correct', { volume: 0.6 });
+        playSfx(this, 'sfx-correct', { volume: 0.6 });
         this.refreshCash();
         this.refreshMultiplierUI();
         this.pips.forEach((pip, index) => {
@@ -191,6 +199,21 @@ export class Shop extends Scene
     {
         const cash: number = this.registry.get('cash') ?? 0;
         this.cashText.setText(`Cash: $${cash}`);
+
+        // Redrawn (not just filled once) so the pill grows to fit a larger
+        // Text Size setting or a big cash total instead of clipping it.
+        const height = 52;
+        const width = Math.max(260, this.cashText.width + 72);
+        const x = this.cashPillX;
+        const y = this.cashPillY;
+
+        this.cashPillShadow.clear();
+        this.cashPillShadow.fillStyle(SHADOW_COLOR, 0.2);
+        this.cashPillShadow.fillRoundedRect(x - width / 2 + 2, y - height / 2 + 4, width, height, height / 2);
+
+        this.cashPillBg.clear();
+        this.cashPillBg.fillStyle(CARD_COLOR, 1);
+        this.cashPillBg.fillRoundedRect(x - width / 2, y - height / 2, width, height, height / 2);
     }
 
     private refreshMultiplierUI (): void
@@ -219,10 +242,16 @@ export class Shop extends Scene
         this.buyLabel.setText(maxed ? 'Max Level' : `Buy for $${cost}`);
         this.buyLabel.setColor(this.buyEnabled ? TEXT_DARK : TEXT_MUTED);
 
-        const w = this.buyButton.getData('w') as number;
+        // Grown to fit the label (not just the original 180px floor) so a
+        // larger Text Size setting, or a higher-level cost's extra digit,
+        // doesn't clip against the button.
+        const minWidth = this.buyButton.getData('w') as number;
         const h = this.buyButton.getData('h') as number;
+        const w = Math.max(minWidth, this.buyLabel.width + 40);
+
         this.buyBg.clear();
         this.buyBg.fillStyle(this.buyEnabled ? ACCENT_GREEN : DISABLED_COLOR, 1);
         this.buyBg.fillRoundedRect(-w / 2, -h / 2, w, h, h / 2);
+        this.buyHitZone.setSize(w, h);
     }
 }

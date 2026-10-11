@@ -1,4 +1,8 @@
 import { Scene, GameObjects } from 'phaser';
+import { playSfx } from '../audio';
+import { resetRunState } from '../economy';
+import { applyAnimationSpeed } from '../settings';
+import { scaledFontSize } from '../ui/text';
 
 const ACCENT_ORANGE = 0xf3814a;
 const ACCENT_GREEN = 0x4fa876;
@@ -61,6 +65,7 @@ export class GameOver extends Scene
         // Picks up from the Game scene's fade-to-black so the day-end screen
         // eases in rather than snapping into view.
         this.cameras.main.fadeIn(600, 26, 18, 11);
+        applyAnimationSpeed(this);
 
         this.background = this.add.image(512, 384, 'shop-bg');
         this.background.setDisplaySize(1024, 768);
@@ -75,7 +80,7 @@ export class GameOver extends Scene
                 : `Day ${summary.day} Complete!`;
 
         this.add.text(512, 68, title, {
-            fontFamily: FONT_UI, fontStyle: '800', fontSize: 40, color: '#ffffff',
+            fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(40, this.registry), color: '#ffffff',
             align: 'center'
         }).setOrigin(0.5).setShadow(0, 4, 'rgba(0,0,0,0.35)', 10);
 
@@ -100,7 +105,7 @@ export class GameOver extends Scene
                 : `Day ${summary.day} of ${summary.totalDays} — here's how it went`;
 
         this.add.text(512, 158, subtitle, {
-            fontFamily: FONT_UI, fontSize: 18, color: '#e9e2d8',
+            fontFamily: FONT_UI, fontSize: scaledFontSize(18, this.registry), color: '#e9e2d8',
             align: 'center'
         }).setOrigin(0.5);
 
@@ -134,11 +139,11 @@ export class GameOver extends Scene
             this.add.circle(cardX + 44, rowY, 7, stat.accent);
 
             this.add.text(cardX + 68, rowY, stat.label, {
-                fontFamily: FONT_UI, fontStyle: '600', fontSize: 18, color: TEXT_MUTED
+                fontFamily: FONT_UI, fontStyle: '600', fontSize: scaledFontSize(18, this.registry), color: TEXT_MUTED
             }).setOrigin(0, 0.5);
 
             this.add.text(cardX + cardWidth - 32, rowY, stat.value, {
-                fontFamily: FONT_UI, fontStyle: '800', fontSize: 21, color: TEXT_DARK
+                fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(21, this.registry), color: TEXT_DARK
             }).setOrigin(1, 0.5);
         });
 
@@ -149,7 +154,7 @@ export class GameOver extends Scene
             ? `Total Revenue: $${summary.totalRevenue} / $${summary.billsTarget} needed`
             : `Total Revenue: $${summary.totalRevenue}`;
         this.add.text(512, totalRevenueY, totalRevenueLabel, {
-            fontFamily: FONT_UI, fontStyle: '800', fontSize: summary.isFinalDay ? 28 : 22, color: '#ffffff',
+            fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(summary.isFinalDay ? 28 : 22, this.registry), color: '#ffffff',
             align: 'center'
         }).setOrigin(0.5).setShadow(0, 2, 'rgba(0,0,0,0.35)', 6);
 
@@ -158,23 +163,25 @@ export class GameOver extends Scene
         const buttonY = totalRevenueY + 50;
         const buttonLabelText = summary.isFinalDay ? 'Play Again' : 'Go to Shop';
 
+        // Drawn around the container's own origin so the idle pulse scales
+        // the button in place instead of drifting it across the screen.
         const buttonShadow = this.add.graphics();
         buttonShadow.fillStyle(0x000000, 0.25);
-        buttonShadow.fillRoundedRect(512 - buttonWidth / 2 + 2, buttonY - buttonHeight / 2 + 5, buttonWidth, buttonHeight, buttonHeight / 2);
+        buttonShadow.fillRoundedRect(-buttonWidth / 2 + 2, -buttonHeight / 2 + 5, buttonWidth, buttonHeight, buttonHeight / 2);
 
         const buttonBg = this.add.graphics();
         buttonBg.fillStyle(ACCENT_ORANGE, 1);
-        buttonBg.fillRoundedRect(512 - buttonWidth / 2, buttonY - buttonHeight / 2, buttonWidth, buttonHeight, buttonHeight / 2);
+        buttonBg.fillRoundedRect(-buttonWidth / 2, -buttonHeight / 2, buttonWidth, buttonHeight, buttonHeight / 2);
 
-        const buttonLabel = this.add.text(512, buttonY, buttonLabelText, {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 20, color: TEXT_DARK
+        const buttonLabel = this.add.text(0, 0, buttonLabelText, {
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(20, this.registry), color: TEXT_DARK
         }).setOrigin(0.5);
 
-        const button = this.add.container(0, 0, [buttonShadow, buttonBg, buttonLabel]);
+        const button = this.add.container(512, buttonY, [buttonShadow, buttonBg, buttonLabel]);
 
         this.tweens.add({
             targets: button,
-            scale: 1.04,
+            scale: 1.02,
             duration: 750,
             yoyo: true,
             repeat: -1,
@@ -184,9 +191,12 @@ export class GameOver extends Scene
         const hitZone = this.add.zone(512, buttonY, buttonWidth, buttonHeight).setInteractive({ useHandCursor: true });
 
         hitZone.on('pointerdown', () => {
+            // One press only — repeat clicks during the fade would each
+            // queue another scene start.
+            hitZone.disableInteractive();
             this.tweens.killTweensOf(button);
             this.tweens.add({ targets: button, scale: 0.94, duration: 80, yoyo: true });
-            this.sound.play('sfx-ui-click', { volume: 0.5 });
+            playSfx(this, 'sfx-ui-click', { volume: 0.5 });
 
             this.cameras.main.fadeOut(500, 26, 18, 11);
             this.cameras.main.once('camerafadeoutcomplete', () => {
@@ -195,11 +205,14 @@ export class GameOver extends Scene
                     // A full run is over — reset the run-level state and send
                     // the player back to the title screen rather than
                     // straight into a new day 1.
-                    this.registry.set('currentDay', 1);
-                    this.registry.set('totalRevenue', 0);
-                    this.registry.set('cash', 0);
-                    this.registry.set('multiplierLevel', 0);
+                    resetRunState(this.registry);
                     this.scene.start('MainMenu');
+                }
+                else if (summary.day === 1)
+                {
+                    // After the first day the boss sets the week's target,
+                    // then the Story scene carries on to the Shop.
+                    this.scene.start('Story', { mode: 'boss', roughDay: summary.ranOutOfLives });
                 }
                 else
                 {

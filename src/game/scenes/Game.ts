@@ -1,5 +1,10 @@
 import { Scene, GameObjects } from 'phaser';
-import { DEFAULT_DIFFICULTY, getBillsTarget, getPayoutMultiplier, Difficulty } from '../economy';
+import { DEFAULT_DIFFICULTY, getBillsTarget, getPayoutMultiplier, Difficulty, TOTAL_DAYS } from '../economy';
+import { playSfx } from '../audio';
+import { pickRemark } from '../remarks';
+import { applyAnimationSpeed, DEFAULT_SETTINGS } from '../settings';
+import { scaledFontSize } from '../ui/text';
+import { TypewriterText } from '../ui/typewriter';
 
 interface ItemDefinition
 {
@@ -58,7 +63,6 @@ const PRICE_SCALE_PER_LEVEL = 0.12;
 // count) — a fast, accurate player naturally serves more customers in it
 // than a slow or mistake-prone one. Days get longer as they go, from a
 // tight 60s opener up to a full 3-minute closer.
-const TOTAL_DAYS = 5;
 const DAY_DURATIONS_MS = [60, 90, 120, 150, 180].map((seconds) => seconds * 1000);
 
 // The in-game clock always runs 9am-5pm regardless of how long the day's
@@ -116,8 +120,10 @@ const CUSTOMER_MEET_X = 760;
 const CUSTOMER_DISPLAY_SIZE = 480;
 
 // A new customer sprite is picked at random each round — same walk-in,
-// idle bob, and walk-out treatment regardless of which one shows up.
-const CUSTOMER_KEYS = ['customer', 'customer2', 'customer3'];
+// idle bob, and walk-out treatment regardless of which one shows up. The
+// previous round's customer is left out of the draw, so nobody shows up
+// twice in a row.
+const CUSTOMER_KEYS = ['customer', 'customer2', 'customer3', 'customer4'];
 
 // The purchased items are displayed as a fixed cluster inside the panel
 // (right side, above the bill row) rather than floating in world space
@@ -311,12 +317,14 @@ export class Game extends Scene
     livesPillContainer: GameObjects.Container;
     livesDots: GameObjects.Arc[] = [];
     infoText: GameObjects.Text;
+    infoTypewriter: TypewriterText;
     totalText: GameObjects.Text;
     feedbackContainer: GameObjects.Container;
     music: Phaser.Sound.BaseSound;
     musicTrackIndex = 0;
     confirmGlow: GameObjects.Arc;
     confirmGlowTween: Phaser.Tweens.Tween | null = null;
+    pauseButtonContainer: GameObjects.Container;
 
     changeUI: GameObjects.Container;
     itemIconGroup: GameObjects.Container;
@@ -342,9 +350,64 @@ export class Game extends Scene
     roundHadMistake = false;
     lives = MAX_LIVES;
     ranOutOfLives = false;
+    dayEnding = false;
     currentDay = 1;
     dayDurationMs = DAY_DURATIONS_MS[0];
     currentItems: PurchaseItem[] = [];
+    // Deliberately not reset in create() — carrying it over means the
+    // last customer of one day can't open the next one either.
+    lastCustomerKey: string | null = null;
+
+    // Arrow-function fields so these stay stable references across this
+    // scene instance's repeated create() calls (Phaser reuses the instance
+    // on "Start Next Day") — every .on() below is paired with a matching
+    // .off() using these exact same references to avoid stacking duplicate
+    // listeners on every restart.
+    // `this.time.now` mirrors the engine's global clock, not "time this
+    // scene has spent active" — it keeps advancing in the background for
+    // the whole real-world duration of a pause, even though step()/update()
+    // aren't called while paused. Left alone, every elapsed-time check below
+    // (day budget, round speed bonus) would silently eat the pause's real
+    // wall-clock duration and then jump forward the instant the scene
+    // resumes. Date.now() (unaffected by Phaser's own clock) measures that
+    // duration so the absolute-time markers can be shifted forward by
+    // exactly as long as the pause lasted, making every "time since X"
+    // calculation below behave as if the pause never happened.
+    private pausedAtRealTime: number | null = null;
+    private handleScenePause = (): void => {
+        this.music?.pause();
+        this.pausedAtRealTime = Date.now();
+    };
+    private handleSceneResume = (): void => {
+        this.music?.resume();
+        // Animation Speed can be changed from the pause menu's Settings —
+        // pick it up now rather than only when the next day starts.
+        applyAnimationSpeed(this);
+        if (this.pausedAtRealTime !== null)
+        {
+            const pausedMs = Date.now() - this.pausedAtRealTime;
+            this.dayStartTime += pausedMs;
+            this.roundStartTime += pausedMs;
+            this.customerArrivalTime += pausedMs;
+            this.pausedAtRealTime = null;
+        }
+    };
+    private handleSceneShutdown = (): void => { this.music?.stop(); };
+    private handleMusicVolumeChange = (_parent: unknown, value: number): void => {
+        // `volume`/`setVolume` are declared on the concrete WebAudioSound/
+        // HTML5AudioSound subclasses, not on the abstract BaseSound type
+        // `this.music` is typed as — every sound this project actually
+        // creates at runtime is one of those two.
+        (this.music as Phaser.Sound.WebAudioSound | undefined)?.setVolume(MUSIC_VOLUME * value);
+    };
+    private openPauseMenu = (): void => {
+        // Pausing mid fade-out would freeze the fade with the pause menu
+        // up, and Resume would then leave that menu over the next scene.
+        if (this.scene.isPaused() || this.dayEnding) return;
+        playSfx(this, 'sfx-ui-click', { volume: 0.5 });
+        this.scene.pause('Game');
+        this.scene.launch('PauseMenu', { returnTo: 'Game' });
+    };
 
     constructor ()
     {
@@ -357,6 +420,7 @@ export class Game extends Scene
         // this scene instance is reused on "Start Next Day", the camera's
         // alpha would otherwise still be left at 0 from the previous fadeOut.
         this.cameras.main.fadeIn(500, 26, 18, 11);
+        applyAnimationSpeed(this);
 
         // Phaser reuses this same Scene instance across restarts (Start Next
         // Day -> 'Game' again), so the class-field initializers above only
@@ -378,6 +442,7 @@ export class Game extends Scene
         this.roundHadMistake = false;
         this.lives = MAX_LIVES;
         this.ranOutOfLives = false;
+        this.dayEnding = false;
         this.livesDots = [];
         this.currentItems = [];
         this.itemIcons = [];
@@ -385,7 +450,12 @@ export class Game extends Scene
         this.billCounts.clear();
         this.billCountTexts.clear();
         this.billCountBadges.clear();
-        this.dayStartTime = this.time.now;
+        // Not this.time.now: a scene's clock only updates once the scene is
+        // running, so in create() it still holds whenever this scene last
+        // ran (or 0 on first launch) — and the menus, summary and shop time
+        // would all count against the day. game.loop.now is the value the
+        // clock is about to be fed on its first tick.
+        this.dayStartTime = this.game.loop.now;
 
         // Persisted in the registry (not scene data) so it survives "Start
         // Next Day" restarts of this same scene instance. Defaults to day 1
@@ -400,6 +470,19 @@ export class Game extends Scene
         // song playing "first" every time.
         this.musicTrackIndex = randomInt(0, MUSIC_TRACKS.length - 1);
         this.playNextTrack(MUSIC_INTRO_FADE_MS);
+
+        // See the arrow-field comment above — these must be paired
+        // off()/on() since this Scene instance is reused across restarts.
+        this.events.off('pause', this.handleScenePause);
+        this.events.on('pause', this.handleScenePause);
+        this.events.off('resume', this.handleSceneResume);
+        this.events.on('resume', this.handleSceneResume);
+        this.events.off('shutdown', this.handleSceneShutdown);
+        this.events.on('shutdown', this.handleSceneShutdown);
+        this.registry.events.off('changedata-musicVolume', this.handleMusicVolumeChange);
+        this.registry.events.on('changedata-musicVolume', this.handleMusicVolumeChange);
+        this.input.keyboard?.off('keydown-ESC', this.openPauseMenu);
+        this.input.keyboard?.on('keydown-ESC', this.openPauseMenu);
 
         // Chosen on the CharacterSelect screen and kept in the registry (not
         // scene data) so it survives "Start Next Day" restarts of this same
@@ -425,7 +508,7 @@ export class Game extends Scene
         // Four evenly-spaced pills across the top — the same safe "clear of
         // the characters" strip the stat pills already lived in, so the
         // clock has a natural home without touching layout anywhere else.
-        const topRowCenters = [112, 378.67, 645.33, 912];
+        const topRowCenters = [112, 378.67, 645.33, 890];
 
         const scorePill = this.createStatPill(topRowCenters[0], 'center', 'Served: 0', ACCENT_GREEN);
         this.scoreText = scorePill.text;
@@ -439,16 +522,20 @@ export class Game extends Scene
         this.revenueText = revenuePill.text;
         this.revenuePillContainer = revenuePill.container;
 
-        const livesPill = this.createLivesPill(topRowCenters[3]);
+        // Shrunk slightly from the other pills' default 176px width to make
+        // room for the pause button at the end of the top row.
+        const livesPill = this.createLivesPill(topRowCenters[3], 140);
         this.livesPillContainer = livesPill.container;
         this.livesDots = livesPill.dots;
+
+        this.pauseButtonContainer = this.createPauseButton(994, 44);
 
         this.feedbackContainer = this.add.container(512, 165).setDepth(10).setAlpha(0);
 
         this.createChangeUI();
 
         this.tweens.add({
-            targets: [this.cashier, scorePill.container, clockPill.container, revenuePill.container, livesPill.container, this.changeUI],
+            targets: [this.cashier, scorePill.container, clockPill.container, revenuePill.container, livesPill.container, this.pauseButtonContainer, this.changeUI],
             alpha: 1,
             duration: 700,
             ease: 'Sine.easeOut'
@@ -482,17 +569,20 @@ export class Game extends Scene
         this.music = track;
         track.play();
 
+        const musicVolume = (this.registry.get('musicVolume') as number) ?? DEFAULT_SETTINGS.musicVolume;
+        const targetVolume = MUSIC_VOLUME * musicVolume;
+
         // Explicit `from` rather than letting the tween read the sound's
         // current volume: a WebAudio GainNode's value can read back stale
         // for a tick right after a fresh sound starts playing, which made
         // the tween capture ~1 as its start point instead of the 0 we just
         // configured it with.
-        this.tweens.add({ targets: track, volume: { from: 0, to: MUSIC_VOLUME }, duration: fadeInMs, ease: 'Sine.easeIn' });
+        this.tweens.add({ targets: track, volume: { from: 0, to: targetVolume }, duration: fadeInMs, ease: 'Sine.easeIn' });
 
         track.once('complete', () => {
             this.tweens.add({
                 targets: track,
-                volume: { from: MUSIC_VOLUME, to: 0 },
+                volume: { from: targetVolume, to: 0 },
                 duration: MUSIC_CROSSFADE_MS,
                 onComplete: () => track.stop()
             });
@@ -502,10 +592,21 @@ export class Game extends Scene
 
     private createStatPill (x: number, align: 'left' | 'center' | 'right', label: string, accent: number): { container: GameObjects.Container; text: GameObjects.Text }
     {
-        const width = 176;
         const height = 48;
-        const left = align === 'right' ? -width : align === 'center' ? -width / 2 : 0;
         const pillRadius = height / 2;
+
+        // Measure the label at its actual (Text Size-scaled) font size
+        // first, so the pill can grow to fit it — 176 is a floor, not a
+        // fixed size, so normal play keeps today's look.
+        const text = this.add.text(0, height / 2, label, {
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(18, this.registry), color: TEXT_DARK
+        }).setOrigin(0, 0.5);
+
+        const badgeInset = 26;
+        const badgeToTextGap = 25;
+        const rightPadding = 20;
+        const width = Math.max(176, badgeInset + badgeToTextGap + text.width + rightPadding);
+        const left = align === 'right' ? -width : align === 'center' ? -width / 2 : 0;
 
         // Soft, borderless elevation — the shadow alone separates the chip
         // from the scene, matching the flat white-card look of the reference.
@@ -519,13 +620,11 @@ export class Game extends Scene
 
         // A soft tinted disc behind a smaller solid dot, echoing the
         // colored icon badges used for categories in the reference app.
-        const badgeX = left + 26;
+        const badgeX = left + badgeInset;
         const badge = this.add.circle(badgeX, height / 2, 15, accent, 0.16);
         const dot = this.add.circle(badgeX, height / 2, 7, accent);
 
-        const text = this.add.text(badgeX + 25, height / 2, label, {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 18, color: TEXT_DARK
-        }).setOrigin(0, 0.5);
+        text.setPosition(badgeX + badgeToTextGap, height / 2);
 
         const container = this.add.container(x, 20, [shadow, bg, badge, dot, text]);
         container.setDepth(10);
@@ -536,9 +635,8 @@ export class Game extends Scene
     // Same white pill shell as createStatPill, but the "value" is three
     // dots instead of a number — a heart-style life counter that fills in
     // green and empties to a hollow outline as mistakes cost lives.
-    private createLivesPill (x: number): { container: GameObjects.Container; dots: GameObjects.Arc[] }
+    private createLivesPill (x: number, width = 176): { container: GameObjects.Container; dots: GameObjects.Arc[] }
     {
-        const width = 176;
         const height = 48;
         const left = -width / 2;
         const pillRadius = height / 2;
@@ -552,7 +650,7 @@ export class Game extends Scene
         bg.fillRoundedRect(left, 0, width, height, pillRadius);
 
         const label = this.add.text(left + 20, height / 2, 'Lives', {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 18, color: TEXT_DARK
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(18, this.registry), color: TEXT_DARK
         }).setOrigin(0, 0.5);
 
         const dots: GameObjects.Arc[] = [];
@@ -583,6 +681,29 @@ export class Game extends Scene
         });
     }
 
+    // A small HUD button, same shadow+bg+zone shape as the bill/clear/confirm
+    // buttons below — drawn with a plain pause-glyph (two bars) rather than
+    // a new image asset, matching this project's "no UI image assets"
+    // convention.
+    private createPauseButton (x: number, y: number): GameObjects.Container
+    {
+        const size = 44;
+        const { shadow, bg } = this.drawButtonBackground(size, size, CARD_COLOR, 1, 14);
+
+        const bars = this.add.graphics();
+        bars.fillStyle(0x2b241d, 1);
+        bars.fillRoundedRect(-7, -9, 5, 18, 2);
+        bars.fillRoundedRect(2, -9, 5, 18, 2);
+
+        const hitZone = this.add.zone(0, 0, size, size);
+        const container = this.add.container(x, y, [shadow, bg, bars, hitZone]);
+        container.setDepth(10);
+
+        this.attachButtonInteractions(hitZone, container, () => this.openPauseMenu());
+
+        return container;
+    }
+
     private createChangeUI (): void
     {
         const panelX = PANEL_MARGIN;
@@ -600,12 +721,13 @@ export class Game extends Scene
         panelBg.fillRoundedRect(panelX, PANEL_Y, panelWidth, panelHeight, RADIUS_CARD);
 
         this.infoText = this.add.text(panelX + 26, PANEL_Y + 22, 'Get ready — your first customer is on the way!', {
-            fontFamily: FONT_SERIF, fontSize: 25, color: TEXT_DARK,
+            fontFamily: FONT_SERIF, fontSize: scaledFontSize(25, this.registry), color: TEXT_DARK,
             lineSpacing: 8
         });
+        this.infoTypewriter = new TypewriterText(this, this.infoText);
 
         this.totalText = this.add.text(panelX + 26, PANEL_Y + 66, 'Change given: $0', {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 23, color: toCssColor(ACCENT_ORANGE)
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(23, this.registry), color: toCssColor(ACCENT_ORANGE)
         });
 
         this.itemIconGroup = this.add.container(0, 0);
@@ -671,7 +793,7 @@ export class Game extends Scene
             });
             // A slight random detune per press keeps a repeated click from
             // sounding mechanically identical every time.
-            this.sound.play('sfx-ui-click', { volume: 0.5, detune: randomInt(-80, 80) });
+            playSfx(this, 'sfx-ui-click', { volume: 0.5, detune: randomInt(-80, 80) });
             onClick();
         });
 
@@ -713,7 +835,7 @@ export class Game extends Scene
         const countBadge = this.add.graphics().setAlpha(0);
 
         const countText = this.add.text(badgeX, badgeY, '', {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 14, color: '#ffffff'
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(14, this.registry), color: '#ffffff'
         }).setOrigin(0.5).setAlpha(0);
 
         this.billCountTexts.set(value, countText);
@@ -746,14 +868,17 @@ export class Game extends Scene
 
     private createClearButton (x: number, y: number): void
     {
-        const width = 108;
         const height = 52;
 
-        const { shadow, bg } = this.drawButtonBackground(width, height, 0xf3ede2, 1, height / 2);
-
         const label = this.add.text(0, 0, 'Clear', {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 16, color: TEXT_MUTED
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(16, this.registry), color: TEXT_MUTED
         }).setOrigin(0.5);
+
+        // Fit the pill to the label at its actual (Text Size-scaled) width
+        // rather than clipping it against a fixed 108px.
+        const width = Math.max(108, label.width + 40);
+
+        const { shadow, bg } = this.drawButtonBackground(width, height, 0xf3ede2, 1, height / 2);
 
         const hitZone = this.add.zone(0, 0, width, height);
         const container = this.add.container(x, y, [shadow, bg, label, hitZone]);
@@ -833,11 +958,15 @@ export class Game extends Scene
 
     private startNewCustomer (): void
     {
+        // A new customer only follows the day opening or the previous one
+        // leaving — never while someone is still at the counter.
+        if (this.dayEnding || (this.state !== 'idle' && this.state !== 'walking-out')) return;
+
         this.state = 'walking-in';
         this.resetGivenAmount();
         this.setControlsActive(false);
         this.feedbackContainer.setAlpha(0);
-        this.infoText.setText('A customer is walking in…');
+        this.infoTypewriter.reveal('A customer is walking in…');
         this.itemPriceTags = [];
         this.customerArrivalTime = this.time.now;
         this.roundHadMistake = false;
@@ -865,7 +994,10 @@ export class Game extends Scene
         const validBills = paymentPool.filter((bill) => bill > this.price);
         this.payment = randomItem(validBills.length > 0 ? validBills : [Math.max(...PAYMENT_BILLS)]);
 
-        this.customer = this.add.image(CUSTOMER_START_X, FLOOR_Y, randomItem(CUSTOMER_KEYS));
+        const customerKey = randomItem(CUSTOMER_KEYS.filter((key) => key !== this.lastCustomerKey));
+        this.lastCustomerKey = customerKey;
+
+        this.customer = this.add.image(CUSTOMER_START_X, FLOOR_Y, customerKey);
         this.customer.setOrigin(0.5, 1);
         this.customer.setDisplaySize(CUSTOMER_DISPLAY_SIZE, CUSTOMER_DISPLAY_SIZE);
 
@@ -893,7 +1025,7 @@ export class Game extends Scene
             this.itemIconGroup.add(icon);
 
             const priceTag = this.add.text(iconX, ICON_CLUSTER_Y + layout.size / 2 + 6, `$${item.price}`, {
-                fontFamily: FONT_UI, fontStyle: '700', fontSize: 14, color: TEXT_DARK
+                fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(14, this.registry), color: TEXT_DARK
             }).setOrigin(0.5).setAlpha(0);
             this.itemIconGroup.add(priceTag);
             this.itemPriceTags.push(priceTag);
@@ -909,7 +1041,7 @@ export class Game extends Scene
             onComplete: () => {
                 // A soft doorbell-style ping as the customer reaches the
                 // counter, right before their items are revealed.
-                this.sound.play('sfx-ui-sound', { volume: 0.3 });
+                playSfx(this, 'sfx-ui-sound', { volume: 0.3 });
                 this.presentItems();
             }
         });
@@ -939,7 +1071,7 @@ export class Game extends Scene
             });
         });
 
-        this.infoText.setText(`Total $${this.price}  •  Customer pays with a $${this.payment} bill  •  Level ${this.difficultyLevel + 1}`);
+        this.infoTypewriter.reveal(`Total $${this.price}  •  Customer pays with a $${this.payment} bill  •  Level ${this.difficultyLevel + 1}`);
 
         this.time.delayedCall(400, () => {
             this.state = 'awaiting-change';
@@ -962,13 +1094,16 @@ export class Game extends Scene
     // Three strikes closes the shop early — the customer still walks off
     // like any other resolved round, it just leads to endDay() instead of
     // the next customer.
-    private handleLifeLossIfAny (): void
+    // extraDelayMs covers however long the feedback message is still typing
+    // out at a slow Text Speed setting — otherwise the customer could start
+    // walking off before their message finished revealing.
+    private handleLifeLossIfAny (extraDelayMs = 0): void
     {
         if (!this.ranOutOfLives) return;
 
         this.state = 'resolving';
         this.setControlsActive(false);
-        this.time.delayedCall(1300, () => this.walkCustomerOut());
+        this.time.delayedCall(1300 + extraDelayMs, () => this.walkCustomerOut());
     }
 
     private handleConfirm (): void
@@ -982,9 +1117,10 @@ export class Game extends Scene
             this.roundHadMistake = true;
             this.loseLife();
             const breakdown = formatBillBreakdown(minimalBillBreakdown(changeDue));
-            this.showFeedback('incorrect', `Not Quite — Customer is owed $${changeDue}`, `Correct change: ${breakdown}`);
+            const message = `Not Quite — Customer is owed $${changeDue}`;
+            this.showFeedback('incorrect', message, `Correct change: ${breakdown}`);
             this.resetGivenAmount();
-            this.handleLifeLossIfAny();
+            this.handleLifeLossIfAny(TypewriterText.estimateDurationMs(message, this.registry));
             return;
         }
 
@@ -993,9 +1129,10 @@ export class Game extends Scene
             this.roundHadMistake = true;
             this.loseLife();
             const breakdown = formatBillBreakdown(minimalBillBreakdown(changeDue));
-            this.showFeedback('half', 'Right Amount — Fewer Bills Works', `Try: ${breakdown}`);
+            const message = 'Right Amount — Fewer Bills Works';
+            this.showFeedback('half', message, `Try: ${breakdown}`);
             this.resetGivenAmount();
-            this.handleLifeLossIfAny();
+            this.handleLifeLossIfAny(TypewriterText.estimateDurationMs(message, this.registry));
             return;
         }
 
@@ -1012,13 +1149,13 @@ export class Game extends Scene
         this.revenue += payout;
         this.revenueText.setText(`Revenue: $${this.revenue}`);
         this.punch(this.revenuePillContainer, 1.25);
-        this.sound.play('sfx-correct');
+        playSfx(this, 'sfx-correct');
 
         // Every fifth sale gets an extra flourish on top of the usual
         // register sting — a small escalating reward for a streak.
         if (this.score % 5 === 0)
         {
-            this.sound.play('sfx-progression', { volume: 0.6 });
+            playSfx(this, 'sfx-progression', { volume: 0.6 });
             this.cameras.main.flash(300, 243, 129, 74);
         }
 
@@ -1031,7 +1168,85 @@ export class Game extends Scene
         this.state = 'resolving';
         this.setControlsActive(false);
         this.resetGivenAmount();
-        this.time.delayedCall(900, () => this.walkCustomerOut());
+        this.time.delayedCall(900 + TypewriterText.estimateDurationMs(message, this.registry), () => {
+            this.showCustomerRemark(pickRemark(elapsedSeconds, this.lastCustomerKey), () => this.walkCustomerOut());
+        });
+    }
+
+    // A comic-style speech bubble beside the customer's head with a parting
+    // remark about how fast they were served. It sits left of the head
+    // (the stat pills leave no room above it), with its tail pointing right
+    // at the customer, and drifts off with them as they start to leave.
+    private showCustomerRemark (remark: string, onDone: () => void): void
+    {
+        if (!this.customer)
+        {
+            onDone();
+            return;
+        }
+
+        // The feedback card sits in the same patch of screen — clear it
+        // out of the way rather than letting the two overlap.
+        this.tweens.killTweensOf(this.feedbackContainer);
+        this.tweens.add({ targets: this.feedbackContainer, alpha: 0, duration: 200 });
+
+        const paddingX = 18;
+        const paddingY = 12;
+        const tailLength = 18;
+        const outline = 0x2b241d;
+
+        const label = this.add.text(0, 0, remark, {
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(18, this.registry), color: TEXT_DARK,
+            wordWrap: { width: 260 }, align: 'center'
+        }).setOrigin(0.5);
+
+        // Layout is measured from the full remark before the typewriter
+        // clears it, so the bubble doesn't resize as the text types in.
+        const bodyWidth = label.width + paddingX * 2;
+        const bodyHeight = label.height + paddingY * 2;
+        const bodyRight = -tailLength;
+        const bodyLeft = bodyRight - bodyWidth;
+        const bodyTop = -bodyHeight / 2 - 6;
+        const radius = Math.min(18, bodyHeight / 2);
+
+        label.setPosition(bodyLeft + bodyWidth / 2, bodyTop + bodyHeight / 2);
+
+        const shadow = this.add.graphics();
+        shadow.fillStyle(SHADOW_COLOR, 0.18);
+        shadow.fillRoundedRect(bodyLeft + 3, bodyTop + 5, bodyWidth, bodyHeight, radius);
+
+        // Body first, then the tail filled over the body's outline where
+        // they meet, so the two read as one continuous shape.
+        const bubble = this.add.graphics();
+        bubble.fillStyle(CARD_COLOR, 1);
+        bubble.lineStyle(3, outline, 1);
+        bubble.fillRoundedRect(bodyLeft, bodyTop, bodyWidth, bodyHeight, radius);
+        bubble.strokeRoundedRect(bodyLeft, bodyTop, bodyWidth, bodyHeight, radius);
+        bubble.fillTriangle(bodyRight - 3, -8, bodyRight - 3, 8, 0, 0);
+        bubble.lineBetween(bodyRight, -8, 0, 0);
+        bubble.lineBetween(0, 0, bodyRight, 8);
+
+        // The tail's tip (the container origin) points at the customer's
+        // face, a little left of and below the top of their head.
+        const container = this.add.container(this.customer.x - 50, 132, [shadow, bubble, label]);
+        container.setDepth(20);
+        container.setScale(0.6);
+        container.setAlpha(0);
+
+        this.tweens.add({ targets: container, scale: 1, alpha: 1, duration: 220, ease: 'Back.Out' });
+
+        new TypewriterText(this, label).reveal(remark, () => {
+            this.time.delayedCall(1400, () => {
+                this.tweens.add({
+                    targets: container,
+                    x: '+=60',
+                    alpha: 0,
+                    duration: 350,
+                    onComplete: () => container.destroy()
+                });
+                onDone();
+            });
+        });
     }
 
     private drawXIcon (x: number, y: number, size: number, color: number): void
@@ -1063,12 +1278,12 @@ export class Game extends Scene
         // right-amount-wrong-bills near miss.
         if (kind === 'incorrect')
         {
-            this.sound.play('sfx-error', { volume: 0.5 });
+            playSfx(this, 'sfx-error', { volume: 0.5 });
             this.cameras.main.shake(220, 0.006);
         }
         else if (kind === 'half')
         {
-            this.sound.play('sfx-chime', { volume: 0.5 });
+            playSfx(this, 'sfx-chime', { volume: 0.5 });
             this.cameras.main.shake(120, 0.0025);
         }
 
@@ -1090,7 +1305,7 @@ export class Game extends Scene
         const cardHeight = breakdown ? 88 : 64;
 
         const label = this.add.text(0, labelY, message, {
-            fontFamily: FONT_UI, fontStyle: '700', fontSize: 20, color: theme.text
+            fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(20, this.registry), color: theme.text
         }).setOrigin(0, 0.5);
 
         // The correct change isn't shown up front — a small "Show hint"
@@ -1102,11 +1317,11 @@ export class Game extends Scene
         if (breakdown)
         {
             detail = this.add.text(0, 16, breakdown, {
-                fontFamily: FONT_SERIF, fontSize: 19, color: theme.text
+                fontFamily: FONT_SERIF, fontSize: scaledFontSize(19, this.registry), color: theme.text
             }).setOrigin(0, 0.5).setAlpha(0);
 
             const hintLabel = this.add.text(0, 0, 'Show hint', {
-                fontFamily: FONT_UI, fontStyle: '700', fontSize: 15, color: theme.text
+                fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(15, this.registry), color: theme.text
             }).setOrigin(0, 0.5);
 
             const hintPadX = 12;
@@ -1128,7 +1343,7 @@ export class Game extends Scene
             hintHitZone.on('pointerdown', () => {
                 // A distinct "reveal" cue rather than the generic button
                 // click — this is information appearing, not an action firing.
-                this.sound.play('sfx-ui-sound', { volume: 0.45 });
+                playSfx(this, 'sfx-ui-sound', { volume: 0.45 });
 
                 hintButton?.destroy();
                 hintButton = null;
@@ -1212,49 +1427,64 @@ export class Game extends Scene
             ease: 'Back.Out'
         });
 
-        this.tweens.add({
-            targets: this.feedbackContainer,
-            alpha: 0,
-            delay: breakdown ? 2200 : 900,
-            duration: 400
+        // label's width (measured above, from the full message) already
+        // drove every bit of this card's layout — clearing it now and
+        // typewriting it back in doesn't disturb any of that sizing, since
+        // nothing past this point reads label.width again. The dwell delay
+        // (900/2200ms) only starts once the reveal actually finishes, so a
+        // slow Text Speed setting can't fade the card out mid-type.
+        const revealMessage = message;
+        label.setText('');
+        new TypewriterText(this, label).reveal(revealMessage, () => {
+            this.tweens.add({
+                targets: this.feedbackContainer,
+                alpha: 0,
+                delay: breakdown ? 2200 : 900,
+                duration: 400
+            });
         });
     }
 
     private walkCustomerOut (): void
     {
-        if (!this.customer) return;
+        // Only one walk-out per customer — a second call would schedule a
+        // second startNewCustomer and leave two customers on screen.
+        if (!this.customer || this.state === 'walking-out') return;
 
         this.state = 'walking-out';
 
         const delta = CUSTOMER_START_X - CUSTOMER_MEET_X;
 
+        // Captured rather than read from this.customer on completion — by
+        // then this.customer may already point at the next customer.
+        const leaving = this.customer;
+
         this.tweens.add({
-            targets: this.customer,
+            targets: leaving,
             x: `+=${delta}`,
             alpha: 0,
             duration: 1100,
             ease: 'Sine.easeInOut',
             onComplete: () => {
-                if (this.customer) this.tweens.killTweensOf(this.customer);
-                this.customer?.destroy();
-                this.customer = null;
+                this.tweens.killTweensOf(leaving);
+                leaving.destroy();
+                if (this.customer === leaving) this.customer = null;
             }
         });
 
+        const leavingItems = [...this.itemIcons, ...this.itemPriceTags];
+        this.itemIcons = [];
+        this.itemPriceTags = [];
+
         this.tweens.add({
-            targets: [...this.itemIcons, ...this.itemPriceTags],
+            targets: leavingItems,
             alpha: 0,
             duration: 400,
-            onComplete: () => {
-                this.itemIcons.forEach((icon) => icon.destroy());
-                this.itemPriceTags.forEach((tag) => tag.destroy());
-                this.itemIcons = [];
-                this.itemPriceTags = [];
-            }
+            onComplete: () => leavingItems.forEach((item) => item.destroy())
         });
 
         const dayIsOver = this.ranOutOfLives || (this.time.now - this.dayStartTime >= this.dayDurationMs);
-        this.infoText.setText(dayIsOver ? 'Closing up for the day…' : 'Waiting for the next customer…');
+        this.infoTypewriter.reveal(dayIsOver ? 'Closing up for the day…' : 'Waiting for the next customer…');
         this.time.delayedCall(1600, () => {
             if (dayIsOver) this.endDay();
             else this.startNewCustomer();
@@ -1263,6 +1493,9 @@ export class Game extends Scene
 
     private endDay (): void
     {
+        if (this.dayEnding) return;
+        this.dayEnding = true;
+
         this.state = 'idle';
         this.setControlsActive(false);
 
