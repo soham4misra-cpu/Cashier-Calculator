@@ -118,6 +118,8 @@ export class Story extends Scene
         input.placeholder = 'Your name';
         input.autocomplete = 'off';
         input.spellcheck = false;
+        input.autocapitalize = 'words';
+        input.enterKeyHint = 'done';
         input.value = (this.registry.get('playerName') as string | undefined) ?? '';
         input.style.cssText = [
             'width: 380px', 'height: 56px', 'box-sizing: border-box', 'padding: 0 20px',
@@ -261,12 +263,16 @@ export class Story extends Scene
 
         const container = this.add.container(x, y, [shadow, bg, label, hitZone]);
 
-        hitZone.on('pointerover', () => {
+        hitZone.on('pointerover', (pointer: Phaser.Input.Pointer) => {
+            // Touch fires 'over' right after 'down' — skip it so the press
+            // squash isn't overridden by a hover grow.
+            if (pointer.wasTouch) return;
             this.tweens.killTweensOf(container);
             this.tweens.add({ targets: container, scale: 1.05, duration: 150, ease: 'Sine.easeOut' });
         });
 
-        hitZone.on('pointerout', () => {
+        hitZone.on('pointerout', (pointer: Phaser.Input.Pointer) => {
+            if (pointer.wasTouch) return;
             this.tweens.killTweensOf(container);
             this.tweens.add({ targets: container, scale: 1, duration: 150, ease: 'Sine.easeOut' });
         });

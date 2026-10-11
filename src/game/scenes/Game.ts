@@ -695,7 +695,9 @@ export class Game extends Scene
         bars.fillRoundedRect(-7, -9, 5, 18, 2);
         bars.fillRoundedRect(2, -9, 5, 18, 2);
 
-        const hitZone = this.add.zone(0, 0, size, size);
+        // Hit area larger than the 44px icon so it stays easy to tap once
+        // the game is scaled down on a phone.
+        const hitZone = this.add.zone(0, 0, size + 28, size + 28);
         const container = this.add.container(x, y, [shadow, bg, bars, hitZone]);
         container.setDepth(10);
 
@@ -797,12 +799,16 @@ export class Game extends Scene
             onClick();
         });
 
-        hitZone.on('pointerover', () => {
+        hitZone.on('pointerover', (pointer: Phaser.Input.Pointer) => {
+            // Touch fires 'over' right after 'down' — skip it so the press
+            // squash isn't overridden by a hover grow.
+            if (pointer.wasTouch) return;
             this.tweens.killTweensOf(container);
             this.tweens.add({ targets: container, scale: 1.06, duration: 150, ease: 'Sine.easeOut' });
         });
 
-        hitZone.on('pointerout', () => {
+        hitZone.on('pointerout', (pointer: Phaser.Input.Pointer) => {
+            if (pointer.wasTouch) return;
             this.tweens.killTweensOf(container);
             this.tweens.add({ targets: container, scale: 1, duration: 150, ease: 'Sine.easeOut' });
         });
@@ -1334,7 +1340,7 @@ export class Game extends Scene
 
             hintLabel.setPosition(hintPadX, 0);
 
-            const hintHitZone = this.add.zone(hintWidth / 2, 0, hintWidth, hintHeight).setInteractive({ useHandCursor: true });
+            const hintHitZone = this.add.zone(hintWidth / 2, 0, hintWidth + 16, hintHeight + 22).setInteractive({ useHandCursor: true });
 
             hintButton = this.add.container(0, 16, [hintBg, hintLabel, hintHitZone]);
 

@@ -3,17 +3,24 @@
 <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#1a120b" />
     <link rel="stylesheet" href="/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@500;600;700;800&display=swap" rel="stylesheet">
-    <title>Phaser - Template</title>
+    <title>Cashier Calculator</title>
 </head>
 
 <body>
     <div id="app">
         <div id="game-container"></div>
+        <div id="rotate-hint">
+            <div class="icon"></div>
+            <div>Rotate your phone to play</div>
+        </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
 </body>

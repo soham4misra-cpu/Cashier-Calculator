@@ -3,7 +3,7 @@ import { CharacterSelect } from './scenes/CharacterSelect';
 import { GameOver } from './scenes/GameOver';
 import { Game as MainGame } from './scenes/Game';
 import { MainMenu } from './scenes/MainMenu';
-import { AUTO, Game } from 'phaser';
+import { AUTO, Game, Scale } from 'phaser';
 import { Overlay } from './scenes/Overlay';
 import { PauseMenu } from './scenes/PauseMenu';
 import { Preloader } from './scenes/Preloader';
@@ -19,6 +19,12 @@ const config: Phaser.Types.Core.GameConfig = {
     height: 768,
     parent: 'game-container',
     backgroundColor: '#028af8',
+    // Shrink the fixed 1024x768 design to fit any screen (phones included)
+    // and keep it centred — input coordinates are mapped back automatically.
+    scale: {
+        mode: Scale.FIT,
+        autoCenter: Scale.CENTER_BOTH
+    },
     // Lets scenes place real HTML elements (the Story scene's name input)
     // over the canvas.
     dom: {

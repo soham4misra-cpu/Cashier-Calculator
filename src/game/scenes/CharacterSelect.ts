@@ -138,12 +138,16 @@ export class CharacterSelect extends Scene
         const hitZone = this.add.zone(0, 0, width, height).setInteractive({ useHandCursor: true });
         container.add(hitZone);
 
-        hitZone.on('pointerover', () => {
+        hitZone.on('pointerover', (pointer: Phaser.Input.Pointer) => {
+            // Touch fires 'over' right after 'down' — skip it so the press
+            // squash isn't overridden by a hover grow.
+            if (pointer.wasTouch) return;
             this.tweens.killTweensOf(container);
             this.tweens.add({ targets: container, scale: 1.05, duration: 150, ease: 'Sine.easeOut' });
         });
 
-        hitZone.on('pointerout', () => {
+        hitZone.on('pointerout', (pointer: Phaser.Input.Pointer) => {
+            if (pointer.wasTouch) return;
             this.tweens.killTweensOf(container);
             this.tweens.add({ targets: container, scale: 1, duration: 150, ease: 'Sine.easeOut' });
         });

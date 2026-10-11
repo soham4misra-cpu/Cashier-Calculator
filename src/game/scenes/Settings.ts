@@ -82,6 +82,9 @@ export class Settings extends Scene
         const trackWidth = cardWidth - 268 - 110;
         const trackHeight = 8;
         const knobRadius = 13;
+        // Nearly the full row height (rows sit 66px apart) so the slider is
+        // easy to hit with a finger.
+        const rowHitHeight = 60;
 
         const track = this.add.graphics();
         track.fillStyle(TRACK_COLOR, 1);
@@ -127,25 +130,21 @@ export class Settings extends Scene
         const initialKnobX = valueToX(currentValue);
         redraw(currentValue, initialKnobX);
 
-        // Added before the knob so the knob (added last) wins hit-testing
-        // over its own area, while clicks elsewhere on the track still
-        // reach this zone underneath.
-        const trackZone = this.add.zone(
-            trackLeft + trackWidth / 2, y, trackWidth + knobRadius * 2, Math.max(trackHeight, knobRadius * 2)
-        ).setInteractive({ useHandCursor: true });
-
-        trackZone.on('pointerdown', (pointer: Input.Pointer) => {
-            applyValue(pointer.x);
-            persistSettings(this.registry);
-        });
-
         const knob = this.add.circle(initialKnobX, y, knobRadius, CARD_COLOR);
         knob.setStrokeStyle(3, ACCENT_ORANGE);
-        knob.setInteractive({ useHandCursor: true });
-        this.input.setDraggable(knob);
 
-        knob.on('drag', (_pointer: Input.Pointer, dragX: number) => applyValue(dragX));
-        knob.on('dragend', () => persistSettings(this.registry));
+        // One tall, draggable zone over the whole track instead of a draggable
+        // knob: a 13px knob is a tiny target once the game is scaled down on a
+        // phone. Pressing anywhere jumps the knob there, and dragging from
+        // that same press keeps sliding it.
+        const trackZone = this.add.zone(
+            trackLeft + trackWidth / 2, y, trackWidth + knobRadius * 4, rowHitHeight
+        ).setInteractive({ useHandCursor: true, draggable: true });
+
+        trackZone.on('pointerdown', (pointer: Input.Pointer) => applyValue(pointer.x));
+        trackZone.on('drag', (pointer: Input.Pointer) => applyValue(pointer.x));
+        trackZone.on('pointerup', () => persistSettings(this.registry));
+        trackZone.on('dragend', () => persistSettings(this.registry));
     }
 
     private createBackButton (x: number, y: number): void
@@ -171,12 +170,16 @@ export class Settings extends Scene
         const hitZone = this.add.zone(0, 0, width, height).setInteractive({ useHandCursor: true });
         container.add(hitZone);
 
-        hitZone.on('pointerover', () => {
+        hitZone.on('pointerover', (pointer: Phaser.Input.Pointer) => {
+            // Touch fires 'over' right after 'down' — skip it so the press
+            // squash isn't overridden by a hover grow.
+            if (pointer.wasTouch) return;
             this.tweens.killTweensOf(container);
             this.tweens.add({ targets: container, scale: 1.05, duration: 150, ease: 'Sine.easeOut' });
         });
 
-        hitZone.on('pointerout', () => {
+        hitZone.on('pointerout', (pointer: Phaser.Input.Pointer) => {
+            if (pointer.wasTouch) return;
             this.tweens.killTweensOf(container);
             this.tweens.add({ targets: container, scale: 1, duration: 150, ease: 'Sine.easeOut' });
         });
