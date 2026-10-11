@@ -1,5 +1,8 @@
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
+// Length of a full run, in days — the bills target is due by the last one.
+export const TOTAL_DAYS = 5;
+
 export interface DifficultyOption
 {
     key: Difficulty;
@@ -33,4 +36,15 @@ export function getPayoutMultiplier (level: number): number
 export function getMultiplierCost (level: number): number
 {
     return 10 * (level + 1);
+}
+
+// Shared by GameOver's final-day "Play Again" and the Pause Menu's "Leave
+// to Main Menu" — both send the player back to a fresh run and need to
+// reset the same run-scoped (not settings) registry state.
+export function resetRunState (registry: Phaser.Data.DataManager): void
+{
+    registry.set('currentDay', 1);
+    registry.set('totalRevenue', 0);
+    registry.set('cash', 0);
+    registry.set('multiplierLevel', 0);
 }
