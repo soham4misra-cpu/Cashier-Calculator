@@ -35,6 +35,8 @@ export class Preloader extends Scene
 
         this.load.image('cashier-female', 'characters/CashierFemale.png');
         this.load.image('cashier-male', 'characters/CashierMale.png');
+        this.load.image('cashier-female-dark', 'characters/CashierFemaledarkskin.png');
+        this.load.image('cashier-male-dark', 'characters/CashierMaledarkskin.png');
         this.load.image('customer', 'characters/CustomerFemale.png');
         this.load.image('customer2', 'characters/Customer_2.png');
         this.load.image('customer3', 'characters/Customer_3.png');

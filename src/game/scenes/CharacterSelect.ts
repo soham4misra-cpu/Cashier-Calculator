@@ -1,5 +1,5 @@
 import { Scene, GameObjects } from 'phaser';
-import { DEFAULT_DIFFICULTY, DIFFICULTIES, Difficulty } from '../economy';
+import { DAY_LENGTHS, DEFAULT_DAY_LENGTH, DEFAULT_DIFFICULTY, DIFFICULTIES } from '../economy';
 import { playSfx } from '../audio';
 import { applyAnimationSpeed } from '../settings';
 import { scaledFontSize } from '../ui/text';
@@ -20,7 +20,9 @@ interface CharacterOption
 
 const CHARACTERS: CharacterOption[] = [
     { key: 'cashier-female', textureKey: 'cashier-female', label: 'Female' },
-    { key: 'cashier-male', textureKey: 'cashier-male', label: 'Male' }
+    { key: 'cashier-female-dark', textureKey: 'cashier-female-dark', label: 'Female' },
+    { key: 'cashier-male', textureKey: 'cashier-male', label: 'Male' },
+    { key: 'cashier-male-dark', textureKey: 'cashier-male-dark', label: 'Male' }
 ];
 
 export class CharacterSelect extends Scene
@@ -54,35 +56,48 @@ export class CharacterSelect extends Scene
             align: 'center'
         }).setOrigin(0.5);
 
-        const cardWidth = 280;
+        // Sized so all four cards fit in one row across the 1024px canvas.
+        const cardWidth = 220;
         const cardHeight = 340;
-        const gap = 40;
+        const gap = 24;
         const cardY = 420;
-        const centers = [512 - (cardWidth + gap) / 2, 512 + (cardWidth + gap) / 2];
 
         CHARACTERS.forEach((character, index) => {
-            this.createCharacterCard(character, centers[index], cardY, cardWidth, cardHeight);
+            const x = 512 + (index - (CHARACTERS.length - 1) / 2) * (cardWidth + gap);
+            this.createCharacterCard(character, x, cardY, cardWidth, cardHeight);
         });
 
-        this.createDifficultyPicker(680);
+        this.createRunOptionPickers(680);
     }
 
-    private createDifficultyPicker (y: number): void
+    // Two independent run settings, side by side under the cards.
+    private createRunOptionPickers (y: number): void
     {
-        this.add.text(512, y - 40, 'Difficulty', {
+        this.createOptionPicker(282, y, 'Difficulty', 'difficulty', DIFFICULTIES, DEFAULT_DIFFICULTY);
+        this.createOptionPicker(742, y, 'Day Length', 'dayLength', DAY_LENGTHS, DEFAULT_DAY_LENGTH);
+    }
+
+    // A row of three pills that writes the picked option's key into the
+    // registry under registryKey.
+    private createOptionPicker (
+        centerX: number, y: number, title: string, registryKey: string,
+        options: { key: string; label: string }[], defaultKey: string
+    ): void
+    {
+        this.add.text(centerX, y - 40, title, {
             fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(16, this.registry), color: '#e9e2d8', align: 'center'
         }).setOrigin(0.5);
 
-        const pillW = 130;
+        const pillW = 128;
         const pillH = 44;
-        const gap = 16;
-        const selected: Difficulty = this.registry.get('difficulty') ?? DEFAULT_DIFFICULTY;
+        const gap = 12;
+        const selected: string = this.registry.get(registryKey) ?? defaultKey;
 
-        const pills = DIFFICULTIES.map((option, index) => {
-            const cx = 512 + (index - 1) * (pillW + gap);
+        const pills = options.map((option, index) => {
+            const cx = centerX + (index - (options.length - 1) / 2) * (pillW + gap);
             const bg = this.add.graphics();
             const label = this.add.text(cx, y, option.label, {
-                fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(18, this.registry), color: TEXT_MUTED
+                fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(17, this.registry), color: TEXT_MUTED
             }).setOrigin(0.5);
 
             const draw = (isSelected: boolean) => {
@@ -97,7 +112,7 @@ export class CharacterSelect extends Scene
             const hitZone = this.add.zone(cx, y, pillW, pillH).setInteractive({ useHandCursor: true });
             hitZone.on('pointerdown', () => {
                 playSfx(this, 'sfx-ui-click', { volume: 0.4 });
-                this.registry.set('difficulty', option.key);
+                this.registry.set(registryKey, option.key);
                 pills.forEach((other) => other.draw(other.key === option.key));
             });
 
@@ -119,11 +134,13 @@ export class CharacterSelect extends Scene
 
         // A soft accent ring behind the portrait — a small nudge that these
         // cards are interactive choices, not just static portraits.
-        const ring = this.add.circle(0, -46, 108, ACCENT_ORANGE, 0);
+        // Portrait (and the ring around it) scale with the card's width.
+        const portraitSize = Math.min(200, width - 44);
+        const ring = this.add.circle(0, -46, portraitSize * 0.54, ACCENT_ORANGE, 0);
         ring.setStrokeStyle(3, ACCENT_ORANGE, 0.35);
 
         const portrait = this.add.image(0, -46, character.textureKey);
-        portrait.setDisplaySize(200, 200);
+        portrait.setDisplaySize(portraitSize, portraitSize);
 
         const label = this.add.text(0, 118, character.label, {
             fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(24, this.registry), color: TEXT_DARK

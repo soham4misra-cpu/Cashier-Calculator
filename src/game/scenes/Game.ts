@@ -1,5 +1,5 @@
-import { Scene, GameObjects } from 'phaser';
-import { DEFAULT_DIFFICULTY, getBillsTarget, getPayoutMultiplier, Difficulty, TOTAL_DAYS } from '../economy';
+import { BlendModes, Scene, GameObjects } from 'phaser';
+import { DayLength, DEFAULT_DAY_LENGTH, DEFAULT_DIFFICULTY, getBillsTarget, getDayLengthScale, getPayoutMultiplier, Difficulty, TOTAL_DAYS } from '../economy';
 import { playSfx } from '../audio';
 import { pickRemark } from '../remarks';
 import { applyAnimationSpeed, DEFAULT_SETTINGS } from '../settings';
@@ -21,6 +21,9 @@ interface PurchaseItem
 {
     key: string;
     name: string;
+    // Per-unit price; the line costs unitPrice * quantity.
+    unitPrice: number;
+    quantity: number;
     price: number;
 }
 
@@ -49,7 +52,12 @@ const ITEM_LAYOUTS: Record<number, ItemLayout> = {
 };
 
 const BILL_VALUES = [1, 5, 10, 20];
-const PAYMENT_BILLS = [5, 10, 20, 50];
+const PAYMENT_BILLS = [5, 10, 20, 50, 100];
+
+// Totals a customer needs before they'll plausibly hand over a big bill —
+// below these, a $50 or $100 for a cheap order would just look odd.
+const FIFTY_MIN_PRICE = 10;
+const HUNDRED_MIN_PRICE = 25;
 
 // Difficulty ramps with how many customers have come through, not with the
 // player's accuracy — orders keep growing even through a rough patch.
@@ -59,6 +67,16 @@ const PREMIUM_UNLOCK_LEVEL = 2;
 const MAX_PRICE_SCALE = 1.6;
 const PRICE_SCALE_PER_LEVEL = 0.12;
 
+// Bulk orders: from this level on, an item can come in a stack of 2-4
+// (priced per unit), pushing totals — and the change owed from a $50 or
+// $100 — well past what single items reach. The odds and the stack size
+// both grow with level.
+const BULK_UNLOCK_LEVEL = 3;
+const BULK_BASE_CHANCE = 0.15;
+const BULK_CHANCE_PER_LEVEL = 0.05;
+const BULK_MAX_CHANCE = 0.6;
+const BULK_MAX_QUANTITY = 4;
+
 // Five days, each a fixed stretch of real time (not a fixed customer
 // count) — a fast, accurate player naturally serves more customers in it
 // than a slow or mistake-prone one. Days get longer as they go, from a
@@ -66,9 +84,80 @@ const PRICE_SCALE_PER_LEVEL = 0.12;
 const DAY_DURATIONS_MS = [60, 90, 120, 150, 180].map((seconds) => seconds * 1000);
 
 // The in-game clock always runs 9am-5pm regardless of how long the day's
-// real-time budget is — an 8-hour shop day compressed into 60-180 seconds.
+// real-time budget is — an 8-hour shop day compressed into 60-180 seconds
+// (30-90 on the Short day length).
 const DAY_START_HOUR = 9;
 const DAY_END_HOUR = 17;
+
+// Time-of-day lighting: bright warm morning -> orange/purple sunset ->
+// dark blue evening, following the shop clock. Two full-screen gradient
+// layers sit between the world (depth 0: background, cashier, customers)
+// and the UI (depth 10+), so the HUD, change panel and bubbles stay
+// untouched. `multiply` tints and darkens; `add` is the light spilling in
+// from the top-left (sun in the morning, cool moonlight at night).
+// Corner colours are [top-left, top-right, bottom-left, bottom-right].
+const LIGHTING_DEPTH = 5;
+
+interface LightingStop
+{
+    at: number;
+    multiply: [number, number, number, number];
+    add: [number, number, number, number];
+}
+
+// Fitted against reference mock-ups of each time of day: morning is warm
+// sunlight pouring in on the left with the right side left near-natural;
+// sunset keeps a warm left but pushes purple/blue into the right; night
+// darkens everything, with a cool blue cast strongest at the top-left.
+const LIGHTING_STOPS: LightingStop[] = [
+    {
+        at: 0,
+        multiply: [0xffffff, 0xfbffff, 0xffffff, 0xecffff],
+        add: [0x321d03, 0x00090d, 0x2d1b04, 0x000807]
+    },
+    {
+        at: 0.2,
+        multiply: [0xffffff, 0xfbffff, 0xffffff, 0xecffff],
+        add: [0x321d03, 0x00090d, 0x2d1b04, 0x000807]
+    },
+    {
+        at: 0.6,
+        multiply: [0xfff0e2, 0xeae6ff, 0xf8e2e2, 0xd8d0ff],
+        add: [0x3a0e00, 0x0a0022, 0x240604, 0x100030]
+    },
+    {
+        at: 1,
+        multiply: [0xa0baba, 0x5973ba, 0x6b7394, 0x57809e],
+        add: [0x061444, 0x000008, 0x00040c, 0x000000]
+    }
+];
+
+function lerpColor (from: number, to: number, t: number): number
+{
+    const channel = (shift: number) => {
+        const a = (from >> shift) & 0xff;
+        const b = (to >> shift) & 0xff;
+        return Math.round(a + (b - a) * t) << shift;
+    };
+    return channel(16) | channel(8) | channel(0);
+}
+
+function getLighting (dayFraction: number): { multiply: number[]; add: number[] }
+{
+    const t = Math.min(1, Math.max(0, dayFraction));
+    const nextIndex = Math.max(1, LIGHTING_STOPS.findIndex((stop) => stop.at >= t));
+    const from = LIGHTING_STOPS[nextIndex - 1];
+    const to = LIGHTING_STOPS[nextIndex];
+    const local = (t - from.at) / (to.at - from.at);
+
+    // Smoothstep so each phase eases in and out instead of changing linearly.
+    const eased = local * local * (3 - 2 * local);
+
+    return {
+        multiply: from.multiply.map((color, i) => lerpColor(color, to.multiply[i], eased)),
+        add: from.add.map((color, i) => lerpColor(color, to.add[i], eased))
+    };
+}
 
 // Difficulty also carries over between days — day 5 opens already harder
 // than day 1 ever gets, on top of its own within-day ramp.
@@ -220,6 +309,17 @@ function getPriceScale (level: number): number
     return Math.min(MAX_PRICE_SCALE, 1 + level * PRICE_SCALE_PER_LEVEL);
 }
 
+function randomQuantity (level: number): number
+{
+    if (level < BULK_UNLOCK_LEVEL) return 1;
+
+    const levelsIn = level - BULK_UNLOCK_LEVEL;
+    const chance = Math.min(BULK_MAX_CHANCE, BULK_BASE_CHANCE + levelsIn * BULK_CHANCE_PER_LEVEL);
+    if (Math.random() >= chance) return 1;
+
+    return randomInt(2, Math.min(BULK_MAX_QUANTITY, 2 + Math.floor(levelsIn / 2)));
+}
+
 // Rewards fast, correct change — the clock runs from the moment the player
 // can act until the moment they get it right, so a fumbled first attempt
 // still counts against the final time rather than getting a free reset.
@@ -344,6 +444,8 @@ export class Game extends Scene
     difficultyLevel = 0;
     roundStartTime = 0;
     dayStartTime = 0;
+    lightTint: GameObjects.Graphics;
+    lightGlow: GameObjects.Graphics;
     customerArrivalTime = 0;
     totalCustomerTimeMs = 0;
     firstTryCorrect = 0;
@@ -461,10 +563,16 @@ export class Game extends Scene
         // Next Day" restarts of this same scene instance. Defaults to day 1
         // for a brand new session.
         this.currentDay = this.registry.get('currentDay') ?? 1;
-        this.dayDurationMs = DAY_DURATIONS_MS[Math.min(this.currentDay, TOTAL_DAYS) - 1];
+        // The chosen Day Length shrinks the whole schedule (Short halves it).
+        const dayLength: DayLength = this.registry.get('dayLength') ?? DEFAULT_DAY_LENGTH;
+        this.dayDurationMs = DAY_DURATIONS_MS[Math.min(this.currentDay, TOTAL_DAYS) - 1] * getDayLengthScale(dayLength);
 
         this.background = this.add.image(512, 384, 'shop-bg');
         this.background.setDisplaySize(1024, 768);
+
+        this.lightTint = this.add.graphics().setDepth(LIGHTING_DEPTH).setBlendMode(BlendModes.MULTIPLY);
+        this.lightGlow = this.add.graphics().setDepth(LIGHTING_DEPTH).setBlendMode(BlendModes.ADD);
+        this.updateLighting(0);
 
         // Which track opens the day is random, so it isn't always the same
         // song playing "first" every time.
@@ -554,6 +662,21 @@ export class Game extends Scene
         const formatted = formatShopClock(fraction);
 
         if (this.clockText.text !== formatted) this.clockText.setText(formatted);
+
+        this.updateLighting(fraction);
+    }
+
+    private updateLighting (dayFraction: number): void
+    {
+        const { multiply, add } = getLighting(dayFraction);
+
+        this.lightTint.clear();
+        this.lightTint.fillGradientStyle(multiply[0], multiply[1], multiply[2], multiply[3], 1);
+        this.lightTint.fillRect(0, 0, 1024, 768);
+
+        this.lightGlow.clear();
+        this.lightGlow.fillGradientStyle(add[0], add[1], add[2], add[3], 1);
+        this.lightGlow.fillRect(0, 0, 1024, 768);
     }
 
     // Plays the next track in the rotation, fading it in over `fadeInMs`.
@@ -986,17 +1109,18 @@ export class Game extends Scene
 
         const priceScale = getPriceScale(level);
         const itemDefs = shuffled(getAvailableItems(level)).slice(0, randomItemCount(level));
-        this.currentItems = itemDefs.map((def) => ({
-            key: def.key,
-            name: def.name,
-            price: Math.max(def.minPrice, Math.round(randomInt(def.minPrice, def.maxPrice) * priceScale))
-        }));
+        this.currentItems = itemDefs.map((def) => {
+            const unitPrice = Math.max(def.minPrice, Math.round(randomInt(def.minPrice, def.maxPrice) * priceScale));
+            const quantity = randomQuantity(level);
+            return { key: def.key, name: def.name, unitPrice, quantity, price: unitPrice * quantity };
+        });
         this.price = this.currentItems.reduce((sum, item) => sum + item.price, 0);
 
-        // A $50 bill only enters the mix once the total is big enough to
+        // Big bills only enter the mix once the total is large enough to
         // plausibly need one — otherwise every early, cheap order would risk
         // getting paid for with an oddly huge bill.
-        const paymentPool = this.price >= 10 ? PAYMENT_BILLS : PAYMENT_BILLS.filter((bill) => bill <= 20);
+        const paymentPool = PAYMENT_BILLS.filter((bill) =>
+            (bill < 50 || this.price >= FIFTY_MIN_PRICE) && (bill < 100 || this.price >= HUNDRED_MIN_PRICE));
         const validBills = paymentPool.filter((bill) => bill > this.price);
         this.payment = randomItem(validBills.length > 0 ? validBills : [Math.max(...PAYMENT_BILLS)]);
 
@@ -1030,7 +1154,8 @@ export class Game extends Scene
             icon.setData('targetSize', layout.size);
             this.itemIconGroup.add(icon);
 
-            const priceTag = this.add.text(iconX, ICON_CLUSTER_Y + layout.size / 2 + 6, `$${item.price}`, {
+            const priceTag = this.add.text(iconX, ICON_CLUSTER_Y + layout.size / 2 + 6,
+                item.quantity > 1 ? `${item.quantity}×$${item.unitPrice}` : `$${item.price}`, {
                 fontFamily: FONT_UI, fontStyle: '700', fontSize: scaledFontSize(14, this.registry), color: TEXT_DARK
             }).setOrigin(0.5).setAlpha(0);
             this.itemIconGroup.add(priceTag);
@@ -1526,7 +1651,8 @@ export class Game extends Scene
         // Only the final day checks the bills — lifetime revenue has to clear
         // the target for the chosen difficulty by then.
         const difficulty: Difficulty = this.registry.get('difficulty') ?? DEFAULT_DIFFICULTY;
-        const billsTarget = getBillsTarget(difficulty);
+        const dayLength: DayLength = this.registry.get('dayLength') ?? DEFAULT_DAY_LENGTH;
+        const billsTarget = getBillsTarget(difficulty, dayLength);
         const billsPaid = totalRevenue >= billsTarget;
 
         // Fade the music out alongside a camera fade-to-black, and only swap

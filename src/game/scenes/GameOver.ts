@@ -161,7 +161,9 @@ export class GameOver extends Scene
         const buttonWidth = 320;
         const buttonHeight = 64;
         const buttonY = totalRevenueY + 50;
-        const buttonLabelText = summary.isFinalDay ? 'Play Again' : 'Go to Shop';
+        const buttonLabelText = summary.isFinalDay
+            ? (summary.billsPaid ? 'Continue' : 'Play Again')
+            : 'Go to Shop';
 
         // Drawn around the container's own origin so the idle pulse scales
         // the button in place instead of drifting it across the screen.
@@ -206,13 +208,21 @@ export class GameOver extends Scene
                     // the player back to the title screen rather than
                     // straight into a new day 1.
                     resetRunState(this.registry);
-                    this.scene.start('MainMenu');
+                    // A winning week gets its ending story first, which
+                    // then carries on to the title screen.
+                    if (summary.billsPaid) this.scene.start('Story', { mode: 'ending' });
+                    else this.scene.start('MainMenu');
                 }
                 else if (summary.day === 1)
                 {
                     // After the first day the boss sets the week's target,
                     // then the Story scene carries on to the Shop.
                     this.scene.start('Story', { mode: 'boss', roughDay: summary.ranOutOfLives });
+                }
+                else if (summary.day === 2)
+                {
+                    // Overdue bills turn up and raise the target before day 3.
+                    this.scene.start('Story', { mode: 'bills' });
                 }
                 else
                 {

@@ -7,22 +7,61 @@ export interface DifficultyOption
 {
     key: Difficulty;
     label: string;
+    initialTarget: number;
     billsTarget: number;
 }
 
 // Lifetime revenue the shop has to clear by the end of day 5 to keep the
-// lights on — harder difficulties ask for more.
+// lights on — harder difficulties ask for more. The boss first quotes the
+// smaller initialTarget after day 1; the overdue bills found after day 2
+// raise it to billsTarget, which is what the final day actually checks.
 export const DIFFICULTIES: DifficultyOption[] = [
-    { key: 'easy', label: 'Easy', billsTarget: 150 },
-    { key: 'normal', label: 'Normal', billsTarget: 300 },
-    { key: 'hard', label: 'Hard', billsTarget: 500 }
+    { key: 'easy', label: 'Easy', initialTarget: 180, billsTarget: 300 },
+    { key: 'normal', label: 'Normal', initialTarget: 330, billsTarget: 550 },
+    { key: 'hard', label: 'Hard', initialTarget: 510, billsTarget: 850 }
 ];
 
 export const DEFAULT_DIFFICULTY: Difficulty = 'normal';
 
-export function getBillsTarget (difficulty: Difficulty): number
+export type DayLength = 'short' | 'medium' | 'standard';
+
+export interface DayLengthOption
 {
-    return DIFFICULTIES.find((option) => option.key === difficulty)?.billsTarget ?? 0;
+    key: DayLength;
+    label: string;
+    scale: number;
+}
+
+// Picked separately from difficulty. Scales every day's real-time length
+// (day 1 runs 30s / 45s / 60s) and, since fewer seconds means fewer
+// customers, the revenue targets by the same factor.
+export const DAY_LENGTHS: DayLengthOption[] = [
+    { key: 'short', label: 'Short', scale: 0.5 },
+    { key: 'medium', label: 'Medium', scale: 0.75 },
+    { key: 'standard', label: 'Standard', scale: 1 }
+];
+
+export const DEFAULT_DAY_LENGTH: DayLength = 'standard';
+
+export function getDayLengthScale (dayLength: DayLength): number
+{
+    return DAY_LENGTHS.find((option) => option.key === dayLength)?.scale ?? 1;
+}
+
+// Scaled targets snap to the nearest $5 so the story never quotes $112.50.
+function scaleTarget (target: number, dayLength: DayLength): number
+{
+    return Math.round((target * getDayLengthScale(dayLength)) / 5) * 5;
+}
+
+export function getInitialTarget (difficulty: Difficulty, dayLength: DayLength): number
+{
+    return scaleTarget(DIFFICULTIES.find((option) => option.key === difficulty)?.initialTarget ?? 0, dayLength);
+}
+
+export function getBillsTarget (difficulty: Difficulty, dayLength: DayLength): number
+{
+    return scaleTarget(DIFFICULTIES.find((option) => option.key === difficulty)?.billsTarget ?? 0, dayLength);
 }
 
 export const MULTIPLIER_STEP = 0.05;

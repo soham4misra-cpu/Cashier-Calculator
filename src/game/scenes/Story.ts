@@ -1,6 +1,6 @@
 import { GameObjects, Scene } from 'phaser';
 import { playSfx } from '../audio';
-import { DEFAULT_DIFFICULTY, Difficulty, getBillsTarget, TOTAL_DAYS } from '../economy';
+import { DayLength, DEFAULT_DAY_LENGTH, DEFAULT_DIFFICULTY, Difficulty, getBillsTarget, getInitialTarget, TOTAL_DAYS } from '../economy';
 import { applyAnimationSpeed } from '../settings';
 import { scaledFontSize } from '../ui/text';
 import { TypewriterText } from '../ui/typewriter';
@@ -26,8 +26,8 @@ function buildIntroStory (name: string): string
     ].join('\n\n');
 }
 
-// Shown once, after the day 1 summary. The target is the same total-revenue
-// goal the final day checks to decide whether the bills got paid.
+// Shown once, after the day 1 summary. The boss quotes the smaller initial
+// target here — the overdue bills story after day 2 raises it to the real one.
 function buildBossStory (name: string, target: number, earned: number, roughDay: boolean): string
 {
     const daysLeft = TOTAL_DAYS - 1;
@@ -47,13 +47,47 @@ function buildBossStory (name: string, target: number, earned: number, roughDay:
     ].join('\n\n');
 }
 
-type StoryMode = 'intro' | 'boss';
+// Shown once, after the day 2 summary. Reveals the full target — the same
+// total-revenue goal the final day checks to decide whether the bills got paid.
+function buildBillsStory (target: number, earned: number): string
+{
+    const daysLeft = TOTAL_DAYS - 2;
+    const remaining = Math.max(0, target - earned);
+    const progress = remaining > 0
+        ? `You've brought in $${earned} so far. That leaves $${remaining} to make in the last ${daysLeft} days.`
+        : `You've already brought in $${earned}, so you're covered. Just keep it up for ${daysLeft} more days.`;
+
+    return [
+        'As you lock up after day 2, you spot an envelope wedged under the shop door.',
+        'Inside: a stack of overdue bills. Rent, electricity, the supplier... all stamped PAST DUE.',
+        `On top of what the boss asked for, you'll need $${target} in total sales by the end of the week to cover it all.`,
+        progress,
+        '*sigh* The work just doesn\'t end.'
+    ].join('\n\n');
+}
+
+// The good ending — shown after the final day's summary when the bills got
+// paid, before returning to the title screen.
+function buildEndingStory (name: string): string
+{
+    return [
+        'On the last evening of the week, your boss counts the till twice, then looks up with a rare smile.',
+        `"I'll be honest, ${name}. You're the best cashier this shop has ever had. Faster and sharper than anyone else I've hired."`,
+        '"No register, no problem. Keep this up and you\'ve got a job here as long as you want it."',
+        'On the way home, you drop the envelope of overdue bills in the mailbox. Every last one of them paid.',
+        'Another work week survived!'
+    ].join('\n\n');
+}
+
+type StoryMode = 'intro' | 'boss' | 'bills' | 'ending';
 
 // Two story beats share this scene. 'intro' sits between CharacterSelect
 // and Game: the player types their name, then reads a short typed-out story
 // about the register-less job. 'boss' sits between the day 1 summary and
-// the Shop: the boss sets the week's sales target. Either way a Next button
-// appears once the text finishes typing.
+// the Shop: the boss sets the week's sales target. 'bills' sits between the
+// day 2 summary and the Shop: overdue bills raise that target. 'ending'
+// follows a winning final day and leads back to the title screen. Either way
+// a Next button appears once the text finishes typing.
 export class Story extends Scene
 {
     private mode: StoryMode = 'intro';
@@ -88,8 +122,21 @@ export class Story extends Scene
         {
             const name = (this.registry.get('playerName') as string | undefined) ?? 'kid';
             const difficulty: Difficulty = this.registry.get('difficulty') ?? DEFAULT_DIFFICULTY;
+            const dayLength: DayLength = this.registry.get('dayLength') ?? DEFAULT_DAY_LENGTH;
             const earned: number = this.registry.get('totalRevenue') ?? 0;
-            this.createStoryStep(buildBossStory(name, getBillsTarget(difficulty), earned, this.roughDay), 'Shop');
+            this.createStoryStep(buildBossStory(name, getInitialTarget(difficulty, dayLength), earned, this.roughDay), 'Shop');
+        }
+        else if (this.mode === 'ending')
+        {
+            const name = (this.registry.get('playerName') as string | undefined) ?? 'kid';
+            this.createStoryStep(buildEndingStory(name), 'MainMenu');
+        }
+        else if (this.mode === 'bills')
+        {
+            const difficulty: Difficulty = this.registry.get('difficulty') ?? DEFAULT_DIFFICULTY;
+            const dayLength: DayLength = this.registry.get('dayLength') ?? DEFAULT_DAY_LENGTH;
+            const earned: number = this.registry.get('totalRevenue') ?? 0;
+            this.createStoryStep(buildBillsStory(getBillsTarget(difficulty, dayLength), earned), 'Shop');
         }
         else
         {
