@@ -14,7 +14,8 @@ const FONT_UI = '"Inter", "Segoe UI", sans-serif';
 interface CardOption
 {
     textureKey: string;
-    label: string;
+    // Cards without a label (the skin tones) show just the portrait.
+    label?: string;
 }
 
 // Two steps: pick a gender, then a skin tone for that gender. Each skin tone
@@ -24,16 +25,16 @@ const GENDERS: (CardOption & { skinTones: CardOption[] })[] = [
         textureKey: 'cashier-female',
         label: 'Female',
         skinTones: [
-            { textureKey: 'cashier-female', label: 'Lighter' },
-            { textureKey: 'cashier-female-dark', label: 'Darker' }
+            { textureKey: 'cashier-female' },
+            { textureKey: 'cashier-female-dark' }
         ]
     },
     {
         textureKey: 'cashier-male',
         label: 'Male',
         skinTones: [
-            { textureKey: 'cashier-male', label: 'Lighter' },
-            { textureKey: 'cashier-male-dark', label: 'Darker' }
+            { textureKey: 'cashier-male' },
+            { textureKey: 'cashier-male-dark' }
         ]
     }
 ];
@@ -245,22 +246,30 @@ export class CharacterSelect extends Scene
         // A soft accent ring behind the portrait — a small nudge that these
         // cards are interactive choices, not just static portraits.
         // Portrait (and the ring around it) scale with the card's width.
-        const portraitSize = Math.min(200, width - 44);
-        const ring = this.add.circle(0, -46, portraitSize * 0.54, ACCENT_ORANGE, 0);
+        // Without a caption the portrait is centred and a little larger.
+        const caption = character.label;
+        const portraitSize = caption ? Math.min(200, width - 44) : Math.min(240, width - 40);
+        const portraitY = caption ? -46 : 0;
+        const ring = this.add.circle(0, portraitY, portraitSize * 0.54, ACCENT_ORANGE, 0);
         ring.setStrokeStyle(3, ACCENT_ORANGE, 0.35);
 
-        const portrait = this.add.image(0, -46, character.textureKey);
+        const portrait = this.add.image(0, portraitY, character.textureKey);
         portrait.setDisplaySize(portraitSize, portraitSize);
 
-        const label = this.add.text(0, 118, character.label, {
-            fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(24, this.registry), color: TEXT_DARK
-        }).setOrigin(0.5);
+        const parts: GameObjects.GameObject[] = [shadow, bg, ring, portrait];
 
-        const hint = this.add.text(0, 148, 'Tap to choose', {
-            fontFamily: FONT_UI, fontStyle: '600', fontSize: scaledFontSize(14, this.registry), color: TEXT_MUTED
-        }).setOrigin(0.5);
+        if (caption)
+        {
+            parts.push(this.add.text(0, 118, caption, {
+                fontFamily: FONT_UI, fontStyle: '800', fontSize: scaledFontSize(24, this.registry), color: TEXT_DARK
+            }).setOrigin(0.5));
 
-        const container = this.track(this.add.container(x, y, [shadow, bg, ring, portrait, label, hint]));
+            parts.push(this.add.text(0, 148, 'Tap to choose', {
+                fontFamily: FONT_UI, fontStyle: '600', fontSize: scaledFontSize(14, this.registry), color: TEXT_MUTED
+            }).setOrigin(0.5));
+        }
+
+        const container = this.track(this.add.container(x, y, parts));
 
         const hitZone = this.add.zone(0, 0, width, height).setInteractive({ useHandCursor: true });
         container.add(hitZone);
