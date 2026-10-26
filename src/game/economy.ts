@@ -3,6 +3,18 @@ export type Difficulty = 'easy' | 'normal' | 'hard';
 // Length of a full run, in days — the bills target is due by the last one.
 export const TOTAL_DAYS = 5;
 
+// The secret ending replaces the bad ending when the week was a write-off:
+// no sales at all, or this many days closed early from running out of lives.
+export const SECRET_ENDING_EARLY_CLOSES = 3;
+
+// Paying the bills with less than this much to spare gets the "just barely"
+// version of the good ending.
+export const CLOSE_CALL_MARGIN = 50;
+
+// Earning at least this multiple of the full target (quota plus overdue
+// bills) gets the promotion ending.
+export const PROMOTION_MULTIPLIER = 2;
+
 export interface DifficultyOption
 {
     key: Difficulty;
@@ -86,4 +98,5 @@ export function resetRunState (registry: Phaser.Data.DataManager): void
     registry.set('totalRevenue', 0);
     registry.set('cash', 0);
     registry.set('multiplierLevel', 0);
+    registry.set('daysClosedEarly', 0);
 }

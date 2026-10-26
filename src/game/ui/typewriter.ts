@@ -9,6 +9,9 @@ export class TypewriterText
     private readonly scene: Scene;
     private readonly textObject: GameObjects.Text;
     private timer: Phaser.Time.TimerEvent | null = null;
+    private fullString = '';
+    private index = 0;
+    private onComplete: (() => void) | undefined;
 
     constructor (scene: Scene, textObject: GameObjects.Text)
     {
@@ -30,7 +33,9 @@ export class TypewriterText
             return;
         }
 
-        let index = 0;
+        this.fullString = fullString;
+        this.index = 0;
+        this.onComplete = onComplete;
 
         // A fixed repeat count rather than `loop: true` — Phaser re-arms a
         // looping timer after its callback returns, even if the callback
@@ -48,16 +53,36 @@ export class TypewriterText
                     return;
                 }
 
-                index += 1;
-                this.textObject.setText(fullString.slice(0, index));
-
-                if (index >= fullString.length)
-                {
-                    this.cancel();
-                    onComplete?.();
-                }
+                this.showUpTo(this.index + 1);
             }
         });
+    }
+
+    get isRevealing (): boolean
+    {
+        return this.timer !== null;
+    }
+
+    // Instantly finishes the paragraph currently being typed (up to the next
+    // blank line); typing then carries on from the start of the next one.
+    skipParagraph (): void
+    {
+        if (!this.timer) return;
+
+        const breakAt = this.fullString.indexOf('\n\n', this.index);
+        this.showUpTo(breakAt === -1 ? this.fullString.length : breakAt + 2);
+    }
+
+    private showUpTo (index: number): void
+    {
+        this.index = Math.min(index, this.fullString.length);
+        this.textObject.setText(this.fullString.slice(0, this.index));
+
+        if (this.index >= this.fullString.length)
+        {
+            this.cancel();
+            this.onComplete?.();
+        }
     }
 
     cancel (): void

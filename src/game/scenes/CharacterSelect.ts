@@ -190,7 +190,7 @@ export class CharacterSelect extends Scene
             this.registry.set('cashierKey', character.key);
 
             this.cameras.main.fadeOut(500, 26, 18, 11);
-            this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Story'));
+            this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Story', { mode: 'intro' }));
         });
     }
 }

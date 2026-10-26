@@ -53,6 +53,16 @@ export const SLOW_REMARKS: string[] = [
     'Next time I am bringing a snack for the wait.'
 ];
 
+// Said by the customer whose order cost the player their last life, right
+// before the shop closes early.
+export const LAST_LIFE_REMARKS: string[] = [
+    'Uh, I think I\'ll go to the self checkout.',
+    'I think you should really invest in a register. Or a calculator.',
+    'Yeah, maybe the store across the street was a little better.',
+    'Sorry, I think I\'ll go to the other cashier.',
+    'If you make another mistake can I get a discount?'
+];
+
 function getPool (elapsedSeconds: number, customerKey: string | null): string[]
 {
     if (elapsedSeconds < INSTANT_REMARK_SECONDS) return INSTANT_REMARKS;
@@ -71,4 +81,9 @@ export function pickRemark (elapsedSeconds: number, customerKey: string | null):
     const pool = getPool(elapsedSeconds, customerKey);
 
     return pool[Math.floor(Math.random() * pool.length)];
+}
+
+export function pickLastLifeRemark (): string
+{
+    return LAST_LIFE_REMARKS[Math.floor(Math.random() * LAST_LIFE_REMARKS.length)];
 }

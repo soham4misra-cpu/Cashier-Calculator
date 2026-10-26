@@ -1,7 +1,7 @@
 import { BlendModes, Scene, GameObjects } from 'phaser';
 import { DayLength, DEFAULT_DAY_LENGTH, DEFAULT_DIFFICULTY, getBillsTarget, getDayLengthScale, getPayoutMultiplier, Difficulty, TOTAL_DAYS } from '../economy';
 import { playSfx } from '../audio';
-import { pickRemark } from '../remarks';
+import { pickLastLifeRemark, pickRemark } from '../remarks';
 import { applyAnimationSpeed, DEFAULT_SETTINGS } from '../settings';
 import { scaledFontSize } from '../ui/text';
 import { TypewriterText } from '../ui/typewriter';
@@ -552,6 +552,10 @@ export class Game extends Scene
         this.billCounts.clear();
         this.billCountTexts.clear();
         this.billCountBadges.clear();
+        // Leaving a paused day via the pause menu stops this scene without a
+        // 'resume', so these could otherwise carry stale values into the next run.
+        this.pausedAtRealTime = null;
+        this.customer = null;
         // Not this.time.now: a scene's clock only updates once the scene is
         // running, so in create() it still holds whenever this scene last
         // ran (or 0 on first launch) — and the menus, summary and shop time
@@ -1222,9 +1226,9 @@ export class Game extends Scene
         if (this.lives <= 0) this.ranOutOfLives = true;
     }
 
-    // Three strikes closes the shop early — the customer still walks off
-    // like any other resolved round, it just leads to endDay() instead of
-    // the next customer.
+    // Three strikes closes the shop early — the customer leaves a parting
+    // jab and walks off like any other resolved round, it just leads to
+    // endDay() instead of the next customer.
     // extraDelayMs covers however long the feedback message is still typing
     // out at a slow Text Speed setting — otherwise the customer could start
     // walking off before their message finished revealing.
@@ -1234,7 +1238,9 @@ export class Game extends Scene
 
         this.state = 'resolving';
         this.setControlsActive(false);
-        this.time.delayedCall(1300 + extraDelayMs, () => this.walkCustomerOut());
+        this.time.delayedCall(1300 + extraDelayMs, () => {
+            this.showCustomerRemark(pickLastLifeRemark(), () => this.walkCustomerOut());
+        });
     }
 
     private handleConfirm (): void
@@ -1644,6 +1650,9 @@ export class Game extends Scene
         // shop — so today's takings land here too, ready for upgrades.
         const cash = (this.registry.get('cash') ?? 0) + this.revenue;
         this.registry.set('cash', cash);
+
+        // Counted across the week for the secret ending.
+        if (this.ranOutOfLives) this.registry.set('daysClosedEarly', (this.registry.get('daysClosedEarly') ?? 0) + 1);
 
         const isFinalDay = this.currentDay >= TOTAL_DAYS;
         if (!isFinalDay) this.registry.set('currentDay', this.currentDay + 1);

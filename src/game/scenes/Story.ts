@@ -1,6 +1,10 @@
 import { GameObjects, Scene } from 'phaser';
 import { playSfx } from '../audio';
-import { DayLength, DEFAULT_DAY_LENGTH, DEFAULT_DIFFICULTY, Difficulty, getBillsTarget, getInitialTarget, TOTAL_DAYS } from '../economy';
+import { DayLength, DEFAULT_DAY_LENGTH, DEFAULT_DIFFICULTY, Difficulty, getBillsTarget, getInitialTarget } from '../economy';
+import {
+    buildBadEndingStory, buildBillsStory, buildBossStory, buildCheckInStory, buildCloseCallEndingStory,
+    buildGoodEndingStory, buildIntroStory, buildPromotionEndingStory, buildSecretEndingStory
+} from '../storyText';
 import { applyAnimationSpeed } from '../settings';
 import { scaledFontSize } from '../ui/text';
 import { TypewriterText } from '../ui/typewriter';
@@ -14,80 +18,16 @@ const FONT_SERIF = '"Cormorant Garamond", serif';
 
 const NAME_MAX_LENGTH = 16;
 
-// Split into paragraphs so each lands on its own line block.
-function buildIntroStory (name: string): string
-{
-    return [
-        `Welcome aboard, ${name}!`,
-        "After weeks of job hunting, you've finally been hired as the new cashier at the corner shop.",
-        "There's just one problem... the store doesn't have a cash register.",
-        "Every customer pays with a bill, and it's up to you to work out their change in your head, using as few bills as possible.",
-        'Ready for your first day?'
-    ].join('\n\n');
-}
+type StoryMode = 'intro' | 'boss' | 'bills' | 'midweek' | 'final-eve' | 'ending' | 'promotion-ending' | 'close-call-ending' | 'bad-ending' | 'secret-ending';
 
-// Shown once, after the day 1 summary. The boss quotes the smaller initial
-// target here — the overdue bills story after day 2 raises it to the real one.
-function buildBossStory (name: string, target: number, earned: number, roughDay: boolean): string
-{
-    const daysLeft = TOTAL_DAYS - 1;
-    const remaining = Math.max(0, target - earned);
-    const progress = remaining > 0
-        ? `So far you've brought in $${earned}. That leaves $${remaining} to make in the next ${daysLeft} days.`
-        : `You've already brought in $${earned}, so you're on track. Just keep it up for ${daysLeft} more days.`;
-
-    return [
-        'At closing time, your boss pulls you aside for a word.',
-        roughDay
-            ? `"Rough first day, ${name}. Three slip-ups and we had to close early. And this shop has bills to pay."`
-            : `"Not bad for a first day, ${name}. But this shop has bills to pay."`,
-        `"I need $${target} in total sales by the end of the week. Fall short, and I'll have to let you go."`,
-        progress,
-        'Better get to work.'
-    ].join('\n\n');
-}
-
-// Shown once, after the day 2 summary. Reveals the full target — the same
-// total-revenue goal the final day checks to decide whether the bills got paid.
-function buildBillsStory (target: number, earned: number): string
-{
-    const daysLeft = TOTAL_DAYS - 2;
-    const remaining = Math.max(0, target - earned);
-    const progress = remaining > 0
-        ? `You've brought in $${earned} so far. That leaves $${remaining} to make in the last ${daysLeft} days.`
-        : `You've already brought in $${earned}, so you're covered. Just keep it up for ${daysLeft} more days.`;
-
-    return [
-        'As you lock up after day 2, you spot an envelope wedged under the shop door.',
-        'Inside: a stack of overdue bills. Rent, electricity, the supplier... all stamped PAST DUE.',
-        `On top of what the boss asked for, you'll need $${target} in total sales by the end of the week to cover it all.`,
-        progress,
-        '*sigh* The work just doesn\'t end.'
-    ].join('\n\n');
-}
-
-// The good ending — shown after the final day's summary when the bills got
-// paid, before returning to the title screen.
-function buildEndingStory (name: string): string
-{
-    return [
-        'On the last evening of the week, your boss counts the till twice, then looks up with a rare smile.',
-        `"I'll be honest, ${name}. You're the best cashier this shop has ever had. Faster and sharper than anyone else I've hired."`,
-        '"No register, no problem. Keep this up and you\'ve got a job here as long as you want it."',
-        'On the way home, you drop the envelope of overdue bills in the mailbox. Every last one of them paid.',
-        'Another work week survived!'
-    ].join('\n\n');
-}
-
-type StoryMode = 'intro' | 'boss' | 'bills' | 'ending';
-
-// Two story beats share this scene. 'intro' sits between CharacterSelect
-// and Game: the player types their name, then reads a short typed-out story
-// about the register-less job. 'boss' sits between the day 1 summary and
-// the Shop: the boss sets the week's sales target. 'bills' sits between the
-// day 2 summary and the Shop: overdue bills raise that target. 'ending'
-// follows a winning final day and leads back to the title screen. Either way
-// a Next button appears once the text finishes typing.
+// Every story beat shares this scene (the text itself lives in storyText.ts).
+// 'intro' sits between CharacterSelect and Game: the player types their
+// name, then reads a short typed-out story about the register-less job.
+// 'boss', 'bills', 'midweek' and 'final-eve' follow the day 1-4 summaries
+// and lead on to the Shop: the boss sets the week's target, overdue bills
+// raise it, then two progress check-ins. The endings follow the final day's
+// summary and lead back to the title screen. Either way a Next button
+// appears once the text finishes typing.
 export class Story extends Scene
 {
     private mode: StoryMode = 'intro';
@@ -102,8 +42,17 @@ export class Story extends Scene
 
     private roughDay = false;
 
-    init (data: { mode?: StoryMode; roughDay?: boolean }): void
+    // The endings' numbers arrive as scene data: GameOver resets the run's
+    // registry state before starting this scene.
+    private finalEarned = 0;
+    private finalTarget = 0;
+    private daysClosedEarly = 0;
+
+    init (data: { mode?: StoryMode; roughDay?: boolean; earned?: number; target?: number; daysClosedEarly?: number }): void
     {
+        this.finalEarned = data.earned ?? 0;
+        this.finalTarget = data.target ?? 0;
+        this.daysClosedEarly = data.daysClosedEarly ?? 0;
         this.mode = data.mode ?? 'intro';
         this.roughDay = data.roughDay ?? false;
     }
@@ -126,10 +75,38 @@ export class Story extends Scene
             const earned: number = this.registry.get('totalRevenue') ?? 0;
             this.createStoryStep(buildBossStory(name, getInitialTarget(difficulty, dayLength), earned, this.roughDay), 'Shop');
         }
+        else if (this.mode === 'promotion-ending')
+        {
+            const name = (this.registry.get('playerName') as string | undefined) ?? 'kid';
+            this.createStoryStep(buildPromotionEndingStory(name, this.finalTarget, this.finalEarned), 'MainMenu');
+        }
+        else if (this.mode === 'close-call-ending')
+        {
+            const name = (this.registry.get('playerName') as string | undefined) ?? 'kid';
+            this.createStoryStep(buildCloseCallEndingStory(name, this.finalTarget, this.finalEarned), 'MainMenu');
+        }
+        else if (this.mode === 'secret-ending')
+        {
+            const name = (this.registry.get('playerName') as string | undefined) ?? 'kid';
+            this.createStoryStep(buildSecretEndingStory(name, this.finalEarned, this.daysClosedEarly), 'MainMenu');
+        }
+        else if (this.mode === 'bad-ending')
+        {
+            const name = (this.registry.get('playerName') as string | undefined) ?? 'kid';
+            this.createStoryStep(buildBadEndingStory(name, this.finalTarget, this.finalEarned), 'MainMenu');
+        }
         else if (this.mode === 'ending')
         {
             const name = (this.registry.get('playerName') as string | undefined) ?? 'kid';
-            this.createStoryStep(buildEndingStory(name), 'MainMenu');
+            this.createStoryStep(buildGoodEndingStory(name, this.finalTarget, this.finalEarned), 'MainMenu');
+        }
+        else if (this.mode === 'midweek' || this.mode === 'final-eve')
+        {
+            const difficulty: Difficulty = this.registry.get('difficulty') ?? DEFAULT_DIFFICULTY;
+            const dayLength: DayLength = this.registry.get('dayLength') ?? DEFAULT_DAY_LENGTH;
+            const earned: number = this.registry.get('totalRevenue') ?? 0;
+            const day = this.mode === 'midweek' ? 3 : 4;
+            this.createStoryStep(buildCheckInStory(day, getBillsTarget(difficulty, dayLength), earned, this.roughDay), 'Shop');
         }
         else if (this.mode === 'bills')
         {
@@ -233,20 +210,32 @@ export class Story extends Scene
         const paddingY = 44;
         const buttonGap = 70;
 
+        // Tallest card that still leaves room for the Next button below it
+        // inside the 768px canvas.
+        const maxCardHeight = 660;
+
+        let fontSize = scaledFontSize(27, this.registry);
         const story = this.add.text(0, 0, '', {
-            fontFamily: FONT_SERIF, fontSize: scaledFontSize(27, this.registry), color: TEXT_DARK,
+            fontFamily: FONT_SERIF, fontSize, color: TEXT_DARK,
             lineSpacing: 4, wordWrap: { width: cardWidth - paddingX * 2 }
         });
 
         // Wrapped up front and typed out pre-broken, so words don't jump to
-        // the next line halfway through being typed.
-        const fullText = story.getWrappedText(storyText).join('\n');
+        // the next line halfway through being typed. The card is sized to the
+        // full story (measured before the reveal clears it); a long story at
+        // a large Text Size steps the font down until it fits on screen.
+        let fullText = '';
+        let cardHeight = 0;
+        do
+        {
+            story.setFontSize(fontSize);
+            fullText = story.getWrappedText(storyText).join('\n');
+            story.setText(fullText);
+            cardHeight = story.height + paddingY * 2;
+            fontSize -= 1;
+        }
+        while (cardHeight > maxCardHeight && fontSize >= 16);
 
-        // The card is sized to the full story (measured before the reveal
-        // clears it), so it fits at any Text Size setting, and the card plus
-        // the Next button below it sit centered on screen.
-        story.setText(fullText);
-        const cardHeight = story.height + paddingY * 2;
         const cardY = 384 - buttonGap / 2;
         story.setText('');
         story.setPosition(512 - cardWidth / 2 + paddingX, cardY - cardHeight / 2 + paddingY);
@@ -256,7 +245,15 @@ export class Story extends Scene
         const container = this.add.container(0, 0, [card, story]).setAlpha(0);
         this.tweens.add({ targets: container, alpha: 1, duration: 300 });
 
-        new TypewriterText(this, story).reveal(fullText, () => {
+        const typewriter = new TypewriterText(this, story);
+
+        // Clicking or tapping anywhere while the story types finishes the
+        // current paragraph at once, so fast readers aren't held up.
+        const skip = (): void => { if (typewriter.isRevealing) typewriter.skipParagraph(); };
+        this.input.on('pointerdown', skip);
+        this.events.once('shutdown', () => this.input.off('pointerdown', skip));
+
+        typewriter.reveal(fullText, () => {
             const button = this.createPillButton(512, cardY + cardHeight / 2 + buttonGap, 'Next', () => this.proceed(nextScene));
             button.setAlpha(0).setScale(0.85);
             this.tweens.add({ targets: button, alpha: 1, scale: 1, duration: 260, ease: 'Back.Out' });

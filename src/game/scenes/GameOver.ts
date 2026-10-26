@@ -1,6 +1,6 @@
 import { Scene, GameObjects } from 'phaser';
 import { playSfx } from '../audio';
-import { resetRunState } from '../economy';
+import { CLOSE_CALL_MARGIN, PROMOTION_MULTIPLIER, resetRunState, SECRET_ENDING_EARLY_CLOSES } from '../economy';
 import { applyAnimationSpeed } from '../settings';
 import { scaledFontSize } from '../ui/text';
 
@@ -162,7 +162,7 @@ export class GameOver extends Scene
         const buttonHeight = 64;
         const buttonY = totalRevenueY + 50;
         const buttonLabelText = summary.isFinalDay
-            ? (summary.billsPaid ? 'Continue' : 'Play Again')
+            ? 'Continue'
             : 'Go to Shop';
 
         // Drawn around the container's own origin so the idle pulse scales
@@ -206,12 +206,22 @@ export class GameOver extends Scene
                 {
                     // A full run is over — reset the run-level state and send
                     // the player back to the title screen rather than
-                    // straight into a new day 1.
+                    // straight into a new day 1. Read anything the ending
+                    // needs from the registry before the reset clears it.
+                    const daysClosedEarly: number = this.registry.get('daysClosedEarly') ?? 0;
                     resetRunState(this.registry);
-                    // A winning week gets its ending story first, which
-                    // then carries on to the title screen.
-                    if (summary.billsPaid) this.scene.start('Story', { mode: 'ending' });
-                    else this.scene.start('MainMenu');
+
+                    // Every week ends with a story (good, bad, or the secret
+                    // one for a week that was a total write-off), which then
+                    // carries on to the title screen.
+                    const wroteOff = summary.totalRevenue === 0 || daysClosedEarly >= SECRET_ENDING_EARLY_CLOSES;
+                    const closeCall = summary.totalRevenue - summary.billsTarget < CLOSE_CALL_MARGIN;
+                    const promoted = summary.totalRevenue >= summary.billsTarget * PROMOTION_MULTIPLIER;
+                    if (summary.billsPaid && promoted) this.scene.start('Story', { mode: 'promotion-ending', earned: summary.totalRevenue, target: summary.billsTarget });
+                    else if (summary.billsPaid && closeCall) this.scene.start('Story', { mode: 'close-call-ending', earned: summary.totalRevenue, target: summary.billsTarget });
+                    else if (summary.billsPaid) this.scene.start('Story', { mode: 'ending', earned: summary.totalRevenue, target: summary.billsTarget });
+                    else if (wroteOff) this.scene.start('Story', { mode: 'secret-ending', earned: summary.totalRevenue, daysClosedEarly });
+                    else this.scene.start('Story', { mode: 'bad-ending', earned: summary.totalRevenue, target: summary.billsTarget });
                 }
                 else if (summary.day === 1)
                 {
@@ -223,6 +233,11 @@ export class GameOver extends Scene
                 {
                     // Overdue bills turn up and raise the target before day 3.
                     this.scene.start('Story', { mode: 'bills' });
+                }
+                else if (summary.day === 3 || summary.day === 4)
+                {
+                    // Progress check-ins before days 4 and 5.
+                    this.scene.start('Story', { mode: summary.day === 3 ? 'midweek' : 'final-eve', roughDay: summary.ranOutOfLives });
                 }
                 else
                 {
